@@ -1,0 +1,126 @@
+{
+  "theme": "Light",
+  "archetype": "Archetype 1: Organic & Earthy (Modified for Utility on Admin)",
+  "vibe": "Customer: Warm, appetite-triggering, tactile, organic, cafe vibes. Admin: Dense, structured, highly legible, professional control room POS.",
+  "typography": {
+    "fonts": {
+      "heading": "Fraunces",
+      "body": "DM Sans",
+      "mono": "JetBrains Mono"
+    },
+    "imports": [
+      "@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,300;1,9..144,400&family=JetBrains+Mono:wght@400;500&display=swap');"
+    ],
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl font-heading tracking-tight leading-none text-foreground",
+      "h2": "text-2xl sm:text-3xl font-heading tracking-tight text-foreground",
+      "h3": "text-xl sm:text-2xl font-heading text-foreground",
+      "h4": "text-lg font-heading text-foreground font-semibold",
+      "body": "text-base font-body text-muted-foreground",
+      "small": "text-sm font-body text-muted-foreground",
+      "overline": "text-xs font-mono uppercase tracking-[0.2em] text-primary"
+    }
+  },
+  "color_palette": {
+    "css_variables": {
+      ":root": {
+        "--background": "45 30% 96%",
+        "--foreground": "25 33% 13%",
+        "--card": "0 0% 100%",
+        "--card-foreground": "25 33% 13%",
+        "--popover": "0 0% 100%",
+        "--popover-foreground": "25 33% 13%",
+        "--primary": "22 89% 45%",
+        "--primary-foreground": "45 30% 96%",
+        "--secondary": "30 20% 88%",
+        "--secondary-foreground": "25 33% 13%",
+        "--muted": "30 15% 92%",
+        "--muted-foreground": "30 10% 45%",
+        "--accent": "35 92% 65%",
+        "--accent-foreground": "25 33% 13%",
+        "--destructive": "0 84% 60%",
+        "--destructive-foreground": "0 0% 98%",
+        "--border": "30 20% 86%",
+        "--input": "30 20% 86%",
+        "--ring": "22 89% 45%",
+        "--radius": "0.75rem",
+        "--status-pending": "38 92% 50%",
+        "--status-preparing": "217 91% 60%",
+        "--status-ready": "152 69% 31%",
+        "--status-completed": "215 16% 47%"
+      },
+      ".dark": {
+        "--background": "25 33% 10%",
+        "--foreground": "45 30% 96%",
+        "--card": "25 33% 12%",
+        "--card-foreground": "45 30% 96%",
+        "--popover": "25 33% 12%",
+        "--popover-foreground": "45 30% 96%",
+        "--primary": "22 89% 55%",
+        "--primary-foreground": "25 33% 10%",
+        "--secondary": "25 20% 20%",
+        "--secondary-foreground": "45 30% 96%",
+        "--muted": "25 20% 18%",
+        "--muted-foreground": "30 10% 65%",
+        "--accent": "35 92% 55%",
+        "--accent-foreground": "25 33% 10%",
+        "--destructive": "0 62.8% 30.6%",
+        "--destructive-foreground": "45 30% 96%",
+        "--border": "25 20% 20%",
+        "--input": "25 20% 20%",
+        "--ring": "22 89% 55%"
+      }
+    },
+    "descriptions": {
+      "primary": "Terracotta Red / Burnt Orange - triggers appetite, used for Place Order, Add to Cart",
+      "background": "Warm Sand - off-white with slight yellow/orange tint to feel like a physical cafe menu",
+      "foreground": "Deep Espresso - for text, avoids pure black, softer on eyes",
+      "status_colors": "Muted, professional colors for admin dashboard to track order states clearly"
+    }
+  },
+  "spacing_and_layout": {
+    "customer": {
+      "strategy": "Mobile-first bento grid. Generous spacing (p-4, p-6). Desktop should max-w-md or max-w-lg to mimic mobile web/kiosk app.",
+      "menu_cards": "Horizontal/Bento layout: Image left/top, text right/bottom. Generous padding inside cards.",
+      "cart_drawer": "Fixed bottom CTA on mobile, massive tap targets (h-14).",
+      "header": "Sticky top, glassmorphism, containing Logo and Loyalty points pill."
+    },
+    "admin": {
+      "strategy": "Control Room Grid. Tight spacing (p-4, gap-4) prioritizing screen real-estate.",
+      "dashboard_stats": "grid-cols-2 md:grid-cols-4 lg:grid-cols-5. 1px borders, cardless look or very subtle shadow.",
+      "orders_list": "Dense table layout. Minimal padding inside cells for max data visibility."
+    }
+  },
+  "surface_strategies": {
+    "customer_cards": "Neumorphism & Clay. Solid background (bg-card), soft shadow (shadow-sm), subtle border (border-border). Rounded-2xl.",
+    "admin_panels": "Grid Borders (Technical). Flat white bg, 1px border-border, no shadow. Sharp or rounded-sm.",
+    "floating_cart": "Glassmorphism. backdrop-blur-xl bg-background/80, 1px inner border, shadow-lg."
+  },
+  "motion_and_interaction": {
+    "hover_states": "-translate-y-1, shadow-md, transition-all duration-200 for food cards.",
+    "active_states": "scale-95 on buttons.",
+    "loading": "Pulse animations on image placeholders. Staggered fade-up for menu items.",
+    "page_transition": "framer-motion standard fade-in for customer switching categories."
+  },
+  "component_instructions": {
+    "buttons": "Customer: Rounded-full, large tap targets (h-12). Admin: Rounded-md, dense, sharp (h-9 or h-10).",
+    "inputs": "Shadcn UI overrides. bg-white, border-border, focus:ring-primary.",
+    "tabs": "Customer menu categories: Pills (rounded-full) horizontally scrollable. Admin: standard underline tabs.",
+    "charts": "Admin dashboard: Use Recharts, clean lines, no grid background, use primary brand color.",
+    "toast": "Use Sonner for order status updates, placed bottom-center for customer, top-right for admin."
+  },
+  "icons_strategy": {
+    "library": "lucide-react",
+    "usage": "Use stroke-width 1.5 for admin (precision), stroke-width 2 for customer (friendly, bold)."
+  },
+  "image_urls": {
+    "hero_cafe_interior": "https://images.unsplash.com/photo-1542372147193-a7aca54189cd?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2OTV8MHwxfHNlYXJjaHwxfHx3YXJtJTIwY2FmZSUyMGludGVyaW9yJTIwYWVzdGhldGljc3xlbnwwfHx8fDE3ODM0OTU1NjR8MA&ixlib=rb-4.1.0&q=85",
+    "placeholder_pizza": "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNTl8MHwxfHNlYXJjaHwyfHxnb3VybWV0JTIwcGl6emElMjBjYWZlfGVufDB8fHx8MTc4MzQ5NTU2NHww&ixlib=rb-4.1.0&q=85",
+    "placeholder_burger": "https://images.pexels.com/photos/24245659/pexels-photo-24245659.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+    "placeholder_coffee": "https://images.unsplash.com/photo-1529892485617-25f63cd7b1e9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzV8MHwxfHNlYXJjaHwxfHxhcnRpc2FuYWwlMjBjb2ZmZWUlMjBsYXR0ZSUyMGFydHxlbnwwfHx8fDE3ODM0OTU1NjR8MA&ixlib=rb-4.1.0&q=85",
+    "placeholder_pastry": "https://images.unsplash.com/photo-1623334044303-241021148842?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzR8MHwxfHNlYXJjaHwxfHxhcnRpc2FuJTIwcGFzdHJ5JTIwY3JvaXNzYW50fGVufDB8fHx8MTc4MzQ5NTU2OXww&ixlib=rb-4.1.0&q=85"
+  },
+  "testing_guidelines": {
+    "attributes": "All interactive and key informational elements MUST include a data-testid attribute to facilitate robust automated testing (e.g., data-testid='place-order-button')."
+  }
+}
