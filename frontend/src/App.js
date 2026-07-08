@@ -19,6 +19,7 @@ import OrderHistoryPage from "@/pages/admin/OrderHistoryPage";
 import MenuManagePage from "@/pages/admin/MenuManagePage";
 import LoyaltyPage from "@/pages/admin/LoyaltyPage";
 import HelpPage from "@/pages/admin/HelpPage";
+import CustomersPage from "@/pages/admin/CustomersPage";
 
 function AdminGuard({ children }) {
   const { admin, loading } = useAdminAuth();
@@ -55,6 +56,7 @@ export default function App() {
                 <Route path="orders" element={<OrdersPage />} />
                 <Route path="history" element={<OrderHistoryPage />} />
                 <Route path="menu" element={<MenuManagePage />} />
+                <Route path="customers" element={<CustomersPage />} />
                 <Route path="loyalty" element={<LoyaltyPage />} />
                 <Route path="help" element={<HelpPage />} />
               </Route>

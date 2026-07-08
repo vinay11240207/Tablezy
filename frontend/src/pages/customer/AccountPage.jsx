@@ -3,11 +3,12 @@ import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { LogOut, Gift, Receipt, Award } from "lucide-react";
 import { api } from "@/lib/api";
-import { useCustomerAuth } from "@/lib/contexts";
+import { useCustomerAuth, useCart } from "@/lib/contexts";
 import { statusLabel } from "./OrderSuccessPage";
 
 export default function AccountPage() {
   const { customer, loading, logout, refresh } = useCustomerAuth();
+  const { addReward, rewardLine } = useCart();
   const nav = useNavigate();
   const [orders, setOrders] = useState([]);
   const [rewards, setRewards] = useState([]);
@@ -19,21 +20,23 @@ export default function AccountPage() {
 
   useEffect(() => {
     if (!customer) return;
-    api.get("/customer/orders").then(({ data }) => setOrders(data));
-    api.get("/rewards?active_only=true").then(({ data }) => setRewards(data));
-    api.get("/customer/points-history").then(({ data }) => setHistory(data));
-  }, [customer]);
+    const load = () => {
+      api.get("/customer/orders").then(({ data }) => setOrders(data)).catch(() => {});
+      api.get("/rewards?active_only=true").then(({ data }) => setRewards(data)).catch(() => {});
+      api.get("/customer/points-history").then(({ data }) => setHistory(data)).catch(() => {});
+      refresh();
+    };
+    load();
+    const t = setInterval(load, 8000);
+    return () => clearInterval(t);
+  }, [customer?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const redeem = async (r) => {
-    try {
-      await api.post(`/rewards/${r.id}/redeem`);
-      toast.success(`Redeemed: ${r.reward_name}`);
-      await refresh();
-      const { data } = await api.get("/customer/points-history");
-      setHistory(data);
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Redemption failed");
-    }
+  const addToCart = (r) => {
+    if (customer.total_points < r.points_required) return toast.error("Not enough points");
+    if (rewardLine) return toast.error("You already added a reward to your cart");
+    addReward(r);
+    toast.success(`${r.reward_name} added to cart`);
+    nav("/cart");
   };
 
   if (loading || !customer) return <div className="p-10 text-center text-muted-foreground">Loading…</div>;
@@ -71,7 +74,7 @@ export default function AccountPage() {
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="font-mono text-xs">{r.points_required} pts</div>
-                  <button data-testid={`redeem-btn-${r.id}`} disabled={!canRedeem} onClick={() => redeem(r)} className="h-9 px-4 rounded-full bg-primary text-primary-foreground text-sm disabled:opacity-40">Redeem</button>
+                  <button data-testid={`redeem-btn-${r.id}`} disabled={!canRedeem} onClick={() => addToCart(r)} className="h-9 px-4 rounded-full bg-primary text-primary-foreground text-sm disabled:opacity-40">Add to cart</button>
                 </div>
               </div>
             );

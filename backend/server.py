@@ -176,6 +176,14 @@ async def admin_login(body: AdminLogin):
     }
 
 
+async def _backfill_guest_orders(customer_id: str, mobile: str):
+    """Link any past guest orders (same mobile, no customer_id) to this customer."""
+    await db.orders.update_many(
+        {"mobile_number": mobile, "customer_id": None},
+        {"$set": {"customer_id": customer_id, "updated_at": now_iso()}},
+    )
+
+
 @api_router.post("/auth/customer/register")
 async def customer_register(body: CustomerRegister):
     mobile = body.mobile_number.strip()
@@ -195,6 +203,7 @@ async def customer_register(body: CustomerRegister):
         "updated_at": now_iso(),
     }
     await db.customers.insert_one(doc)
+    await _backfill_guest_orders(cid, mobile)
     token = make_token(cid, "customer")
     return {
         "token": token,
@@ -204,14 +213,30 @@ async def customer_register(body: CustomerRegister):
 
 @api_router.post("/auth/customer/login")
 async def customer_login(body: CustomerLogin):
-    c = await db.customers.find_one({"mobile_number": body.mobile_number.strip()})
+    mobile = body.mobile_number.strip()
+    c = await db.customers.find_one({"mobile_number": mobile})
     if not c or not verify_pw(body.password, c["password_hash"]):
         raise HTTPException(401, "Invalid credentials")
+    await _backfill_guest_orders(c["id"], mobile)
     token = make_token(c["id"], "customer")
     return {
         "token": token,
         "user": {"id": c["id"], "name": c["name"], "mobile_number": c["mobile_number"], "total_points": c.get("total_points", 0)},
     }
+
+
+# ---------- Admin: Customers ----------
+@api_router.get("/customers")
+async def list_customers(admin: dict = Depends(require_admin)):
+    customers = await db.customers.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(1000)
+    for c in customers:
+        c["orders_count"] = await db.orders.count_documents({"customer_id": c["id"]})
+    return customers
+
+
+@api_router.get("/customers/{cid}/orders")
+async def customer_admin_orders(cid: str, admin: dict = Depends(require_admin)):
+    return await db.orders.find({"customer_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 
 @api_router.get("/auth/me")

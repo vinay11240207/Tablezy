@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { LayoutDashboard, ClipboardList, History, UtensilsCrossed, Gift, HelpCircle, LogOut, Coffee } from "lucide-react";
+import { LayoutDashboard, ClipboardList, History, UtensilsCrossed, Gift, HelpCircle, LogOut, Coffee, Users } from "lucide-react";
 import { useAdminAuth } from "@/lib/contexts";
 
 const nav = [
@@ -7,6 +7,7 @@ const nav = [
   { to: "/admin/orders", label: "Orders", icon: ClipboardList, testid: "nav-orders" },
   { to: "/admin/history", label: "Order History", icon: History, testid: "nav-history" },
   { to: "/admin/menu", label: "Menu", icon: UtensilsCrossed, testid: "nav-menu" },
+  { to: "/admin/customers", label: "Customers", icon: Users, testid: "nav-customers" },
   { to: "/admin/loyalty", label: "Loyalty", icon: Gift, testid: "nav-loyalty" },
   { to: "/admin/help", label: "Help", icon: HelpCircle, testid: "nav-help" },
 ];

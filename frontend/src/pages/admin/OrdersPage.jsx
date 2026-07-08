@@ -26,7 +26,7 @@ export default function OrdersPage() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 4000);
+    const t = setInterval(load, 3000);
     return () => clearInterval(t);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -52,7 +52,14 @@ export default function OrdersPage() {
           <div key={o.id} data-testid={`order-${o.id}`} className="bg-card border border-border rounded-xl p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <div className="font-heading text-lg">#{o.order_number} · Table {o.table_number}</div>
+                <div className="font-heading text-lg flex items-center gap-2">
+                  #{o.order_number} · Table {o.table_number}
+                  {o.reward_id && (
+                    <span data-testid={`reward-badge-${o.id}`} className="text-[10px] font-mono uppercase tracking-[0.15em] px-2 py-0.5 rounded-full bg-accent text-accent-foreground">
+                      Reward: {o.reward_name}
+                    </span>
+                  )}
+                </div>
                 <div className="text-xs text-muted-foreground">{o.customer_name} · {o.mobile_number} · {new Date(o.created_at).toLocaleTimeString()}</div>
               </div>
               <div className="text-right">

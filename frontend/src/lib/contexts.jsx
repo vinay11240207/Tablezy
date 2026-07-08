@@ -101,17 +101,28 @@ export function CartProvider({ children }) {
     if (found) return prev.map((i) => i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i);
     return [...prev, { id: item.id, name: item.name, price: item.price, image_url: item.image_url, quantity: 1 }];
   });
-  const inc = (id) => setItems((prev) => prev.map((i) => i.id === id ? { ...i, quantity: i.quantity + 1 } : i));
+  const addReward = (reward) => setItems((prev) => {
+    const alreadyReward = prev.find((i) => i.is_reward);
+    if (alreadyReward) return prev; // only one reward per order
+    return [...prev, {
+      id: `reward-${reward.id}`, name: `🎁 ${reward.reward_name}`, price: 0,
+      image_url: "", quantity: 1, is_reward: true, reward_id: reward.id,
+      reward_type: reward.reward_type, discount_amount: reward.discount_amount || 0,
+      points_required: reward.points_required,
+    }];
+  });
+  const inc = (id) => setItems((prev) => prev.map((i) => i.id === id ? { ...i, quantity: i.is_reward ? 1 : i.quantity + 1 } : i));
   const dec = (id) => setItems((prev) => prev
-    .map((i) => i.id === id ? { ...i, quantity: i.quantity - 1 } : i)
+    .map((i) => i.id === id ? { ...i, quantity: i.is_reward ? 1 : i.quantity - 1 } : i)
     .filter((i) => i.quantity > 0));
   const remove = (id) => setItems((prev) => prev.filter((i) => i.id !== id));
   const clear = () => setItems([]);
   const count = items.reduce((s, i) => s + i.quantity, 0);
-  const subtotal = items.reduce((s, i) => s + i.quantity * i.price, 0);
+  const subtotal = items.filter((i) => !i.is_reward).reduce((s, i) => s + i.quantity * i.price, 0);
+  const rewardLine = items.find((i) => i.is_reward) || null;
 
   return (
-    <CartCtx.Provider value={{ items, add, inc, dec, remove, clear, count, subtotal }}>
+    <CartCtx.Provider value={{ items, add, addReward, inc, dec, remove, clear, count, subtotal, rewardLine }}>
       {children}
     </CartCtx.Provider>
   );

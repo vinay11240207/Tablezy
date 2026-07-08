@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { apiAdmin } from "@/lib/api";
 import { statusLabel } from "@/pages/customer/OrderSuccessPage";
 
-const RANGES = ["today", "yesterday", "7d", "30d", "month", "all"];
+const RANGES = ["today", "yesterday", "7d", "30d", "month", "year", "all"];
 
 function rangeToDates(r) {
   const now = new Date();
@@ -13,6 +13,7 @@ function rangeToDates(r) {
   else if (r === "7d") { start.setDate(now.getDate() - 6); start.setHours(0, 0, 0, 0); }
   else if (r === "30d") { start.setDate(now.getDate() - 29); start.setHours(0, 0, 0, 0); }
   else if (r === "month") { start.setDate(1); start.setHours(0, 0, 0, 0); }
+  else if (r === "year") { start.setMonth(0, 1); start.setHours(0, 0, 0, 0); }
   else { return { start: null, end: null }; }
   return { start: start.toISOString(), end: end.toISOString() };
 }
@@ -29,7 +30,10 @@ export default function OrderHistoryPage() {
     if (start) params.set("start_date", start);
     if (end) params.set("end_date", end);
     if (search.trim()) params.set("search", search.trim());
-    apiAdmin.get(`/orders?${params.toString()}`).then(({ data }) => setOrders(data));
+    const load = () => apiAdmin.get(`/orders?${params.toString()}`).then(({ data }) => setOrders(data)).catch(() => {});
+    load();
+    const t = setInterval(load, 8000);
+    return () => clearInterval(t);
   }, [range, search]);
 
   const total = useMemo(() => orders.reduce((s, o) => s + (o.order_status === "completed" ? o.total_amount : 0), 0), [orders]);
@@ -48,7 +52,7 @@ export default function OrderHistoryPage() {
             data-testid={`range-${r}`}
             onClick={() => setRange(r)}
             className={`h-9 px-3 rounded-md text-sm ${range === r ? "bg-primary text-primary-foreground" : "border border-border hover:bg-secondary"}`}
-          >{r === "7d" ? "Last 7 Days" : r === "30d" ? "Last 30 Days" : r === "month" ? "This Month" : r[0].toUpperCase() + r.slice(1)}</button>
+          >{r === "7d" ? "Last 7 Days" : r === "30d" ? "Last 30 Days" : r === "month" ? "This Month" : r === "year" ? "This Year" : r[0].toUpperCase() + r.slice(1)}</button>
         ))}
         <input
           data-testid="history-search"

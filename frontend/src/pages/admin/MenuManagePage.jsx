@@ -1,9 +1,33 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Trash2, Edit3, X } from "lucide-react";
+import { Plus, Trash2, Edit3, X, Upload, Camera } from "lucide-react";
 import { apiAdmin } from "@/lib/api";
 
 const EMPTY = { name: "", description: "", price: "", image_url: "", category_id: "", is_available: true };
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    // downscale to max 800px to keep base64 reasonable
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxSide = 800;
+        let { width, height } = img;
+        const scale = Math.min(1, maxSide / Math.max(width, height));
+        const canvas = document.createElement("canvas");
+        canvas.width = width * scale;
+        canvas.height = height * scale;
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function MenuManagePage() {
   const [items, setItems] = useState([]);
@@ -12,6 +36,19 @@ export default function MenuManagePage() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY);
   const [newCat, setNewCat] = useState("");
+  const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  const handleFiles = async (files) => {
+    const f = files?.[0];
+    if (!f) return;
+    if (!f.type.startsWith("image/")) return toast.error("Please choose an image");
+    try {
+      const dataUrl = await fileToDataUrl(f);
+      setForm((prev) => ({ ...prev, image_url: dataUrl }));
+    } catch { toast.error("Could not read image"); }
+  };
 
   const load = async () => {
     const { data } = await apiAdmin.get("/menu");
@@ -101,12 +138,44 @@ export default function MenuManagePage() {
               <div className="font-heading text-xl">{editing ? "Edit item" : "Add item"}</div>
               <button data-testid="close-form" onClick={() => setShowForm(false)} className="w-8 h-8 grid place-items-center rounded-md border border-border"><X className="w-4 h-4" /></button>
             </div>
-            {["name", "description", "price", "image_url"].map((k) => (
+            {["name", "description", "price"].map((k) => (
               <label key={k} className="block">
-                <span className="text-xs font-mono uppercase tracking-[0.15em] text-muted-foreground">{k.replace("_", " ")}</span>
+                <span className="text-xs font-mono uppercase tracking-[0.15em] text-muted-foreground">{k}</span>
                 <input data-testid={`form-${k}`} value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} className="mt-1 w-full h-10 px-3 rounded-md border border-border bg-background" />
               </label>
             ))}
+            <div>
+              <span className="text-xs font-mono uppercase tracking-[0.15em] text-muted-foreground">Food image</span>
+              <div
+                data-testid="image-dropzone"
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
+                className={`mt-1 rounded-md border-2 border-dashed p-4 text-center text-sm transition-colors ${dragOver ? "border-primary bg-primary/5" : "border-border"}`}
+              >
+                {form.image_url ? (
+                  <img src={form.image_url} alt="preview" className="mx-auto h-28 rounded-md object-cover" />
+                ) : (
+                  <div className="text-muted-foreground py-3">Drag & drop an image here</div>
+                )}
+                <div className="mt-3 flex gap-2 justify-center">
+                  <input ref={fileInputRef} type="file" accept="image/*" onChange={(e) => handleFiles(e.target.files)} className="hidden" data-testid="file-input" />
+                  <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" onChange={(e) => handleFiles(e.target.files)} className="hidden" data-testid="camera-input" />
+                  <button type="button" data-testid="pick-gallery-btn" onClick={() => fileInputRef.current?.click()} className="h-9 px-3 rounded-md border border-border text-sm flex items-center gap-1"><Upload className="w-4 h-4" /> Gallery</button>
+                  <button type="button" data-testid="pick-camera-btn" onClick={() => cameraInputRef.current?.click()} className="h-9 px-3 rounded-md border border-border text-sm flex items-center gap-1"><Camera className="w-4 h-4" /> Camera</button>
+                  {form.image_url && (
+                    <button type="button" data-testid="clear-image-btn" onClick={() => setForm({ ...form, image_url: "" })} className="h-9 px-3 rounded-md border border-destructive text-destructive text-sm">Clear</button>
+                  )}
+                </div>
+                <input
+                  data-testid="form-image_url"
+                  value={form.image_url.startsWith("data:") ? "" : form.image_url}
+                  onChange={(e) => setForm({ ...form, image_url: e.target.value })}
+                  placeholder="…or paste image URL"
+                  className="mt-3 w-full h-9 px-3 rounded-md border border-border bg-background text-sm"
+                />
+              </div>
+            </div>
             <label className="block">
               <span className="text-xs font-mono uppercase tracking-[0.15em] text-muted-foreground">Category</span>
               <select data-testid="form-category" value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })} className="mt-1 w-full h-10 px-3 rounded-md border border-border bg-background">

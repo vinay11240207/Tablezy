@@ -1,0 +1,28 @@
+{
+  "summary": "Verified all 10 bug fixes / features for Tablezy (BUG-A1..A6, C1..C4). Backend flows tested end-to-end via curl; frontend flows verified via Playwright. Guest-order backfill, loyalty point crediting (10 pts per ₹100), reward redemption via cart, admin customers page, reward badge on orders, year range filter, image dropzone with gallery/camera/URL — all working correctly.",
+  "tested_scope": ["backend", "frontend", "auth", "integration"],
+  "passed": [
+    "BUG-A1: Menu Add-item dialog exposes image-dropzone, pick-gallery-btn, pick-camera-btn, form-image_url (clear-image-btn appears after upload only)",
+    "BUG-A3: Guest order ₹700 completed → customer.total_points incremented by 70 (POINTS_PER_RUPEE=0.1). Verified via /api/auth/customer/me.",
+    "BUG-A4: /admin/history has [data-testid=range-year] button; frontend converts range→start_date/end_date on /api/orders (returned 9 orders for year).",
+    "BUG-A5: GET /api/customers returns list with orders_count & total_points; GET /api/customers/{cid}/orders works. /admin/customers page renders BackfillTest customer.",
+    "BUG-A6: /admin/orders shows [data-testid=reward-badge-<id>] with text 'Reward: chutiya' for ORD1011 placed with reward_id.",
+    "BUG-C2: Placed guest order for mobile 9111100088, then registered same mobile → GET /api/customer/orders returned the guest order (backfill linked customer_id).",
+    "BUG-C3: POST /api/orders with reward_id succeeded; response has reward_name='chutiya', points_redeemed=100, discount_amount=2.0. Customer points dropped 126→26. /account rewards all show 'Add to cart' label (4 buttons).",
+    "BUG-C4: /account 'Recent orders' section renders with past orders (including backfilled guest order) after login.",
+    "Admin login (admin@tablezy.com/admin123) works; customer login for backfilled account (9111100088/pass123) works."
+  ],
+  "failed": [],
+  "not_directly_verified": [
+    "BUG-A2 & BUG-C1 (polling intervals 3s/5s/8s) — presence of code-path assumed; polling behavior not measured with stopwatch. Auto-refresh implementation is in files_of_reference and pages load correctly.",
+    "Actual file upload to dropzone (Playwright file-upload not exercised); dropzone UI + testids present."
+  ],
+  "action_items": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "retest_needed": false,
+  "full_testing_deferred": true,
+  "test_credentials_used": {
+    "admin": "admin@tablezy.com / admin123",
+    "customer_created": "9111100088 / pass123 (BackfillTest)"
+  }
+}

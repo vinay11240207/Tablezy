@@ -5,10 +5,11 @@ import { useCart } from "@/lib/contexts";
 const TAX_RATE = 0.05;
 
 export default function CartPage() {
-  const { items, inc, dec, remove, subtotal, clear } = useCart();
+  const { items, inc, dec, remove, subtotal, clear, rewardLine } = useCart();
   const nav = useNavigate();
   const tax = +(subtotal * TAX_RATE).toFixed(2);
-  const total = +(subtotal + tax).toFixed(2);
+  const rewardDiscount = rewardLine?.reward_type === "discount" ? Number(rewardLine.discount_amount) : 0;
+  const total = +Math.max(0, subtotal + tax - rewardDiscount).toFixed(2);
 
   if (items.length === 0) {
     return (
@@ -30,21 +31,25 @@ export default function CartPage() {
 
       <div className="space-y-3">
         {items.map((i) => (
-          <div key={i.id} data-testid={`cart-row-${i.id}`} className="bg-card border border-border rounded-2xl p-3 flex gap-3">
-            <div className="w-16 h-16 rounded-lg bg-secondary overflow-hidden">
-              {i.image_url && <img src={i.image_url} alt={i.name} className="w-full h-full object-cover" />}
+          <div key={i.id} data-testid={`cart-row-${i.id}`} className={`bg-card border rounded-2xl p-3 flex gap-3 ${i.is_reward ? "border-accent bg-accent/10" : "border-border"}`}>
+            <div className="w-16 h-16 rounded-lg bg-secondary overflow-hidden grid place-items-center">
+              {i.image_url ? <img src={i.image_url} alt={i.name} className="w-full h-full object-cover" /> : (i.is_reward ? <span className="text-2xl">🎁</span> : null)}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex justify-between gap-2">
                 <div className="font-heading text-base">{i.name}</div>
-                <div className="font-mono text-sm">₹{(i.price * i.quantity).toFixed(0)}</div>
+                <div className="font-mono text-sm">{i.is_reward ? "FREE" : `₹${(i.price * i.quantity).toFixed(0)}`}</div>
               </div>
               <div className="mt-2 flex items-center justify-between">
-                <div className="flex items-center gap-2 rounded-full border border-border">
-                  <button data-testid={`cart-dec-${i.id}`} onClick={() => dec(i.id)} className="w-8 h-8 grid place-items-center"><Minus className="w-4 h-4" /></button>
-                  <span className="min-w-[20px] text-center font-mono text-sm">{i.quantity}</span>
-                  <button data-testid={`cart-inc-${i.id}`} onClick={() => inc(i.id)} className="w-8 h-8 grid place-items-center"><Plus className="w-4 h-4" /></button>
-                </div>
+                {i.is_reward ? (
+                  <div className="text-xs text-muted-foreground">Uses {i.points_required} pts on order</div>
+                ) : (
+                  <div className="flex items-center gap-2 rounded-full border border-border">
+                    <button data-testid={`cart-dec-${i.id}`} onClick={() => dec(i.id)} className="w-8 h-8 grid place-items-center"><Minus className="w-4 h-4" /></button>
+                    <span className="min-w-[20px] text-center font-mono text-sm">{i.quantity}</span>
+                    <button data-testid={`cart-inc-${i.id}`} onClick={() => inc(i.id)} className="w-8 h-8 grid place-items-center"><Plus className="w-4 h-4" /></button>
+                  </div>
+                )}
                 <button data-testid={`cart-remove-${i.id}`} onClick={() => remove(i.id)} className="text-destructive text-xs flex items-center gap-1 hover:underline">
                   <Trash2 className="w-3.5 h-3.5" /> Remove
                 </button>
@@ -57,6 +62,9 @@ export default function CartPage() {
       <div className="bg-card border border-border rounded-2xl p-5 space-y-2 font-mono text-sm">
         <div className="flex justify-between"><span>Subtotal</span><span data-testid="cart-subtotal">₹{subtotal.toFixed(2)}</span></div>
         <div className="flex justify-between"><span>Tax (5% GST)</span><span data-testid="cart-tax">₹{tax.toFixed(2)}</span></div>
+        {rewardDiscount > 0 && (
+          <div className="flex justify-between text-primary"><span>Reward discount</span><span>-₹{rewardDiscount.toFixed(2)}</span></div>
+        )}
         <div className="h-px bg-border my-1" />
         <div className="flex justify-between font-heading text-lg"><span>Total</span><span data-testid="cart-total">₹{total.toFixed(2)}</span></div>
       </div>
