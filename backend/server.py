@@ -229,8 +229,15 @@ async def customer_login(body: CustomerLogin):
 @api_router.get("/customers")
 async def list_customers(admin: dict = Depends(require_admin)):
     customers = await db.customers.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(1000)
+    # aggregate order counts in a single query to avoid N+1
+    counts = {}
+    async for row in db.orders.aggregate([
+        {"$match": {"customer_id": {"$ne": None}}},
+        {"$group": {"_id": "$customer_id", "n": {"$sum": 1}}},
+    ]):
+        counts[row["_id"]] = row["n"]
     for c in customers:
-        c["orders_count"] = await db.orders.count_documents({"customer_id": c["id"]})
+        c["orders_count"] = counts.get(c["id"], 0)
     return customers
 
 
@@ -530,8 +537,9 @@ async def dashboard_stats(admin: dict = Depends(require_admin)):
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
 
-    todays_orders = await db.orders.find({"created_at": {"$gte": today_start}}, {"_id": 0}).to_list(2000)
-    monthly_orders = await db.orders.find({"created_at": {"$gte": month_start}}, {"_id": 0}).to_list(5000)
+    stats_proj = {"_id": 0, "total_amount": 1, "order_status": 1}
+    todays_orders = await db.orders.find({"created_at": {"$gte": today_start}}, stats_proj).to_list(2000)
+    monthly_orders = await db.orders.find({"created_at": {"$gte": month_start}}, stats_proj).to_list(5000)
     pending_orders = await db.orders.count_documents({"order_status": {"$in": ["order_placed", "accepted", "preparing", "ready"]}})
     completed_today = [o for o in todays_orders if o["order_status"] == "completed"]
 

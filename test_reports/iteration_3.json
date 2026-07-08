@@ -1,0 +1,21 @@
+{
+  "summary": "Backend regression after N+1/projection optimization sweep. Verified GET /api/customers aggregation-based orders_count is exact-match with per-customer /orders endpoint, GET /api/customers/{cid}/orders returns array (17 fields incl. items), and GET /api/dashboard/stats correctness via end-to-end scenario: placed guest order subtotal Rs.500 (Cap x1 + Cold Brew x2) -> total Rs.525; before-complete stats showed orders_today +1 with todays_sales unchanged and pending +1 (rejects non-completed from sales); after-complete stats showed todays_sales +525.00 (6247.5 -> 6772.5), orders_today +1 (14 -> 15), completed_today +1 (11 -> 12), pending back to 3. Shapes match spec: customers list has id/name/mobile_number/total_points/created_at/updated_at/orders_count and no password_hash. Dashboard returns todays_sales/orders_today/monthly_sales/pending_orders/completed_today/recent_orders.",
+  "tested_scope": ["backend", "integration"],
+  "passed": [
+    "POST /api/auth/admin/login -> 200 with token",
+    "GET /api/customers -> 200, list of 6, correct fields, no password_hash",
+    "orders_count matches len(GET /api/customers/{cid}/orders) for ALL 6 customers (1,3,0,6,1,1 all OK)",
+    "GET /api/customers/{cid}/orders returns full order docs with expected 17 keys",
+    "POST /api/orders (guest, subtotal 500) -> tax 25, total 525, status order_placed",
+    "GET /api/dashboard/stats before-complete: order_placed did NOT increment todays_sales, only orders_today and pending_orders",
+    "PATCH /api/orders/{oid}/status completed -> success",
+    "GET /api/dashboard/stats after-complete: todays_sales exactly +525.0, orders_today +1, completed_today +1, pending_orders reverted",
+    "monthly_sales also incremented by 525.0 (only completed counted)",
+    "recent_orders array populated in dashboard response"
+  ],
+  "failed": [],
+  "action_items": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "retest_needed": false,
+  "full_testing_deferred": true
+}
