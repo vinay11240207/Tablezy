@@ -1,7 +1,7 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-export const API = `${BACKEND_URL}/api`;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://127.0.0.1:8000";
+export const API = `${BACKEND_URL.replace(/\/$/, "")}/api`;
 
 // Public / customer-scoped axios: sends customer token if present.
 export const api = axios.create({ baseURL: API });

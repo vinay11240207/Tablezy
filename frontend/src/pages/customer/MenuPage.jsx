@@ -26,14 +26,14 @@ export default function MenuPage() {
   const qty = (id) => cartItems.find((i) => i.id === id)?.quantity || 0;
 
   const filtered = useMemo(() => {
-    let arr = menu.items;
-    if (active !== "all") arr = arr.filter((m) => m.category_id === active);
+    let arr = Array.isArray(menu?.items) ? menu.items : [];
+    if (active !== "all") arr = arr.filter((m) => String(m.category_id) === String(active));
     if (q.trim()) {
       const s = q.toLowerCase();
-      arr = arr.filter((m) => m.name.toLowerCase().includes(s) || m.description?.toLowerCase().includes(s));
+      arr = arr.filter((m) => (m.name || "").toLowerCase().includes(s) || (m.description || "").toLowerCase().includes(s));
     }
     return arr;
-  }, [menu.items, active, q]);
+  }, [menu?.items, active, q]);
 
   const slide = (direction) => {
     if (!sliderRef.current) return;
@@ -66,6 +66,11 @@ export default function MenuPage() {
       sliderRef.current.scrollLeft += e.deltaY;
     }
   };
+
+  const categories = useMemo(() => {
+    const list = Array.isArray(menu?.categories) ? menu.categories : [];
+    return list.filter((c) => c.is_active !== false);
+  }, [menu?.categories]);
 
   return (
     <div className="space-y-6 animate-fade-up">
@@ -113,10 +118,10 @@ export default function MenuPage() {
             }}
             className={`h-10 px-5 rounded-full text-sm font-medium whitespace-nowrap border shrink-0 transition-all ${active === "all" ? "bg-primary text-primary-foreground border-primary shadow-sm" : "bg-card border-border hover:bg-secondary"}`}
           >All</button>
-          {menu.categories.filter((c) => c.is_active).map((c) => (
+          {categories.map((c) => (
             <button
               key={c.id}
-              data-testid={`cat-btn-${c.name.toLowerCase()}`}
+              data-testid={`cat-btn-${(c.name || "").toLowerCase()}`}
               onClick={(e) => {
                 setActive(c.id);
                 e.currentTarget.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
@@ -158,7 +163,7 @@ export default function MenuPage() {
               <div className="flex-1 min-w-0 flex flex-col">
                 <div className="flex items-start justify-between gap-3">
                   <h3 className="font-heading text-lg leading-tight">{m.name}</h3>
-                  <div className="font-mono text-base whitespace-nowrap">₹{m.price.toFixed(0)}</div>
+                  <div className="font-mono text-base whitespace-nowrap">₹{Number(m.price || 0).toFixed(0)}</div>
                 </div>
                 <p className="text-sm text-muted-foreground line-clamp-2 mt-1">{m.description}</p>
                 <div className="mt-auto pt-2 flex items-center justify-between">
