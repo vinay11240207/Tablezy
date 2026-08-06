@@ -120,13 +120,14 @@ export function CartProvider({ children }) {
     if (!validMenuItems || validMenuItems.length === 0) return;
     setItems((prev) => {
       const validMap = new Map(validMenuItems.map((m) => [m.id, m]));
-      const nameMap = new Map(validMenuItems.map((m) => [m.name.toLowerCase().strip ? m.name.toLowerCase().strip() : m.name.toLowerCase(), m]));
+      const nameMap = new Map(validMenuItems.map((m) => [(m.name || "").toLowerCase().trim(), m]));
 
       return prev.map((item) => {
+        if (!item) return null;
         if (item.is_reward) return item;
         if (validMap.has(item.id)) return item;
         // Match by name if ID changed after database re-seed
-        const matchedByName = nameMap.get(item.name.toLowerCase().trim());
+        const matchedByName = nameMap.get((item.name || "").toLowerCase().trim());
         if (matchedByName) {
           return { ...item, id: matchedByName.id, price: matchedByName.price };
         }
@@ -134,6 +135,11 @@ export function CartProvider({ children }) {
       }).filter(Boolean);
     });
   };
+
+  const clear = () => setItems([]);
+  const count = items.reduce((s, i) => s + (i.is_reward ? 0 : i.quantity), 0);
+  const rewardLine = items.find((i) => i.is_reward) || null;
+  const subtotal = items.reduce((s, i) => s + (i.is_reward ? 0 : i.price * i.quantity), 0);
 
   return (
     <CartCtx.Provider value={{ items, add, addReward, inc, dec, remove, clear, count, subtotal, rewardLine, sanitizeCart }}>
