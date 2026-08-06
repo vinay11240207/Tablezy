@@ -79,6 +79,14 @@ def _serialize_value(v: Any):
         return [_serialize_value(x) for x in v]
     if isinstance(v, dict):
         return {k: _serialize_value(x) for k, x in v.items()}
+    # Auto-parse JSON strings (e.g. items column stored as TEXT in DB)
+    if isinstance(v, str) and len(v) > 0 and v[0] in ('[', '{'):
+        try:
+            import json as _json
+            parsed = _json.loads(v)
+            return _serialize_value(parsed)
+        except Exception:
+            pass
     return v
 
 

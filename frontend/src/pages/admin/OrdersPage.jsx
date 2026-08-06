@@ -16,12 +16,25 @@ export default function OrdersPage() {
   const [prevIds, setPrevIds] = useState(new Set());
 
   const load = async () => {
-    const { data } = await apiAdmin.get("/orders?status_group=active");
-    const currentIds = new Set(data.map((o) => o.id));
-    const newIds = [...currentIds].filter((id) => !prevIds.has(id));
-    if (prevIds.size > 0 && newIds.length > 0) toast.success(`${newIds.length} new order(s)!`);
-    setPrevIds(currentIds);
-    setOrders(data);
+    try {
+      const { data } = await apiAdmin.get("/orders?status_group=active");
+      const list = Array.isArray(data) ? data : [];
+      // Ensure each order's items field is an array
+      const normalized = list.map((o) => ({
+        ...o,
+        items: Array.isArray(o.items) ? o.items
+          : typeof o.items === 'string' ? (() => { try { return JSON.parse(o.items); } catch { return []; } })()
+          : [],
+        total_amount: Number(o.total_amount) || 0,
+      }));
+      const currentIds = new Set(normalized.map((o) => o.id));
+      const newIds = [...currentIds].filter((id) => !prevIds.has(id));
+      if (prevIds.size > 0 && newIds.length > 0) toast.success(`${newIds.length} new order(s)!`);
+      setPrevIds(currentIds);
+      setOrders(normalized);
+    } catch (e) {
+      console.error("Failed to load orders", e);
+    }
   };
 
   useEffect(() => {
@@ -64,11 +77,11 @@ export default function OrdersPage() {
               </div>
               <div className="text-right">
                 <div className="text-xs px-2 py-1 rounded-md bg-secondary inline-block">{statusLabel(o.order_status)}</div>
-                <div className="font-mono text-lg mt-1">₹{o.total_amount.toFixed(2)}</div>
+                <div className="font-mono text-lg mt-1">₹{Number(o.total_amount || 0).toFixed(2)}</div>
               </div>
             </div>
             <div className="mt-3 text-sm space-y-0.5">
-              {o.items.map((it) => (
+              {(Array.isArray(o.items) ? o.items : []).map((it) => (
                 <div key={it.id} className="flex justify-between">
                   <span>{it.item_name} × {it.quantity}</span>
                   <span className="font-mono text-xs text-muted-foreground">₹{it.item_total.toFixed(0)}</span>

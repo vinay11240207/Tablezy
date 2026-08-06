@@ -53,10 +53,10 @@ export default function OrderTrackPage() {
 
       <div className="bg-card border border-border rounded-2xl p-5 space-y-2">
         <div className="text-xs font-mono uppercase tracking-[0.15em] text-muted-foreground">Items</div>
-        {order.items.map((it) => (
+        {(Array.isArray(order.items) ? order.items : []).map((it) => (
           <div key={it.id} className="flex justify-between text-sm">
             <span>{it.item_name} × {it.quantity}</span>
-            <span className="font-mono">₹{it.item_total.toFixed(0)}</span>
+            <span className="font-mono">₹{Number(it.item_total || 0).toFixed(0)}</span>
           </div>
         ))}
       </div>
