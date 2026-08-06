@@ -20,6 +20,7 @@ export default function MenuPage() {
       setMenu(data);
       if (sanitizeCart) sanitizeCart(data.items);
     }).finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const qty = (id) => cartItems.find((i) => i.id === id)?.quantity || 0;
