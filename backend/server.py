@@ -964,7 +964,10 @@ async def create_order(
     for it in body.items:
         mi = await pool.fetchrow("SELECT * FROM menu_items WHERE id=$1", it.menu_item_id)
         if not mi:
-            raise HTTPException(400, f"Item not found: {it.menu_item_id}")
+            # Fallback lookup by ID string or name match if item ID was refreshed
+            mi = await pool.fetchrow("SELECT * FROM menu_items WHERE lower(name) = lower($1)", it.menu_item_id)
+        if not mi:
+            raise HTTPException(400, "One of the items in your cart is no longer in the menu. Please clear your cart and re-add items.")
         if not mi["is_available"]:
             raise HTTPException(400, f"Item unavailable: {mi['name']}")
         line = float(mi["price"]) * int(it.quantity)
@@ -1109,11 +1112,19 @@ async def list_orders(
         )
 
     if start_date:
-        params.append(start_date)
-        where.append(f"created_at::date >= ${len(params)}::date")
+        try:
+            d_start = datetime.fromisoformat(start_date.replace("Z", "+00:00")).date()
+            params.append(d_start)
+            where.append(f"created_at::date >= ${len(params)}::date")
+        except Exception:
+            pass
     if end_date:
-        params.append(end_date)
-        where.append(f"created_at::date <= ${len(params)}::date")
+        try:
+            d_end = datetime.fromisoformat(end_date.replace("Z", "+00:00")).date()
+            params.append(d_end)
+            where.append(f"created_at::date <= ${len(params)}::date")
+        except Exception:
+            pass
 
     where_sql = ""
     if where:

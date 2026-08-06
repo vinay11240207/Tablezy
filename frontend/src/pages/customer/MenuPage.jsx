@@ -9,14 +9,17 @@ export default function MenuPage() {
   const [loading, setLoading] = useState(true);
   const [active, setActive] = useState("all");
   const [q, setQ] = useState("");
-  const { items: cartItems, add, inc, dec } = useCart();
+  const { items: cartItems, add, inc, dec, sanitizeCart } = useCart();
   const sliderRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
   const [startX, setStartX] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
 
   useEffect(() => {
-    api.get("/menu").then(({ data }) => setMenu(data)).finally(() => setLoading(false));
+    api.get("/menu").then(({ data }) => {
+      setMenu(data);
+      if (sanitizeCart) sanitizeCart(data.items);
+    }).finally(() => setLoading(false));
   }, []);
 
   const qty = (id) => cartItems.find((i) => i.id === id)?.quantity || 0;
