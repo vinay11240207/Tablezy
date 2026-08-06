@@ -7,7 +7,7 @@ import { useAdminAuth } from "@/lib/contexts";
 export default function AdminLoginPage() {
   const { admin, login } = useAdminAuth();
   const nav = useNavigate();
-  const [f, setF] = useState({ email: "admin@tablezy.com", password: "" });
+  const [f, setF] = useState({ email: "admin@carolinalounge.com", password: "" });
   const [busy, setBusy] = useState(false);
 
   if (admin) return <Navigate to="/admin/dashboard" replace />;
@@ -32,7 +32,7 @@ export default function AdminLoginPage() {
             <Coffee className="w-6 h-6" strokeWidth={1.5} />
           </div>
           <div>
-            <div className="font-heading text-2xl leading-none">Tablezy</div>
+            <div className="font-heading text-2xl leading-none">CAROLINA Lounge</div>
             <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">Admin Console</div>
           </div>
         </div>
@@ -49,7 +49,7 @@ export default function AdminLoginPage() {
           </label>
           <button data-testid="admin-login-submit" disabled={busy} className="w-full h-11 rounded-md bg-primary text-primary-foreground font-medium disabled:opacity-40">{busy ? "Signing in…" : "Sign in"}</button>
         </form>
-        <p className="text-xs text-muted-foreground mt-4 text-center">Demo: admin@tablezy.com / admin123</p>
+        <p className="text-xs text-muted-foreground mt-4 text-center">Demo: admin@carolinalounge.com / carolina123</p>
       </div>
     </div>
   );

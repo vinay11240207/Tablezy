@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Search, Plus, Minus, ImageOff } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Search, Plus, Minus, ImageOff, ChevronLeft, ChevronRight } from "lucide-react";
 import { api } from "@/lib/api";
 import { useCart } from "@/lib/contexts";
 import { toast } from "sonner";
@@ -10,6 +10,10 @@ export default function MenuPage() {
   const [active, setActive] = useState("all");
   const [q, setQ] = useState("");
   const { items: cartItems, add, inc, dec } = useCart();
+  const sliderRef = useRef(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [startX, setStartX] = useState(0);
+  const [scrollLeft, setScrollLeft] = useState(0);
 
   useEffect(() => {
     api.get("/menu").then(({ data }) => setMenu(data)).finally(() => setLoading(false));
@@ -26,6 +30,38 @@ export default function MenuPage() {
     }
     return arr;
   }, [menu.items, active, q]);
+
+  const slide = (direction) => {
+    if (!sliderRef.current) return;
+    const amount = direction === "left" ? -260 : 260;
+    sliderRef.current.scrollBy({ left: amount, behavior: "smooth" });
+  };
+
+  const handleMouseDown = (e) => {
+    if (!sliderRef.current) return;
+    setIsDragging(true);
+    setStartX(e.pageX - sliderRef.current.offsetLeft);
+    setScrollLeft(sliderRef.current.scrollLeft);
+  };
+
+  const handleMouseLeaveOrUp = () => {
+    setIsDragging(false);
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isDragging || !sliderRef.current) return;
+    e.preventDefault();
+    const x = e.pageX - sliderRef.current.offsetLeft;
+    const walk = (x - startX) * 1.5;
+    sliderRef.current.scrollLeft = scrollLeft - walk;
+  };
+
+  const handleWheel = (e) => {
+    if (!sliderRef.current) return;
+    if (e.deltaY !== 0 && !e.shiftKey) {
+      sliderRef.current.scrollLeft += e.deltaY;
+    }
+  };
 
   return (
     <div className="space-y-6 animate-fade-up">
@@ -46,20 +82,54 @@ export default function MenuPage() {
         />
       </div>
 
-      <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+      <div className="relative group">
         <button
-          data-testid="cat-btn-all"
-          onClick={() => setActive("all")}
-          className={`h-10 px-4 rounded-full text-sm whitespace-nowrap border transition-all ${active === "all" ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-secondary"}`}
-        >All</button>
-        {menu.categories.filter((c) => c.is_active).map((c) => (
+          type="button"
+          onClick={() => slide("left")}
+          className="absolute -left-3 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-card/95 border border-border shadow-md grid place-items-center opacity-90 hover:opacity-100 hover:scale-105 transition"
+          aria-label="Slide left"
+        >
+          <ChevronLeft className="w-4 h-4 text-foreground" />
+        </button>
+
+        <div
+          ref={sliderRef}
+          onMouseDown={handleMouseDown}
+          onMouseLeave={handleMouseLeaveOrUp}
+          onMouseUp={handleMouseLeaveOrUp}
+          onMouseMove={handleMouseMove}
+          onWheel={handleWheel}
+          className={`flex gap-2 overflow-x-auto no-scrollbar py-1 px-1 select-none scroll-smooth ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
+        >
           <button
-            key={c.id}
-            data-testid={`cat-btn-${c.name.toLowerCase()}`}
-            onClick={() => setActive(c.id)}
-            className={`h-10 px-4 rounded-full text-sm whitespace-nowrap border transition-all ${active === c.id ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-secondary"}`}
-          >{c.name}</button>
-        ))}
+            data-testid="cat-btn-all"
+            onClick={(e) => {
+              setActive("all");
+              e.currentTarget.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+            }}
+            className={`h-10 px-5 rounded-full text-sm font-medium whitespace-nowrap border shrink-0 transition-all ${active === "all" ? "bg-primary text-primary-foreground border-primary shadow-sm" : "bg-card border-border hover:bg-secondary"}`}
+          >All</button>
+          {menu.categories.filter((c) => c.is_active).map((c) => (
+            <button
+              key={c.id}
+              data-testid={`cat-btn-${c.name.toLowerCase()}`}
+              onClick={(e) => {
+                setActive(c.id);
+                e.currentTarget.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+              }}
+              className={`h-10 px-5 rounded-full text-sm font-medium whitespace-nowrap border shrink-0 transition-all ${active === c.id ? "bg-primary text-primary-foreground border-primary shadow-sm" : "bg-card border-border hover:bg-secondary"}`}
+            >{c.name}</button>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => slide("right")}
+          className="absolute -right-3 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-card/95 border border-border shadow-md grid place-items-center opacity-90 hover:opacity-100 hover:scale-105 transition"
+          aria-label="Slide right"
+        >
+          <ChevronRight className="w-4 h-4 text-foreground" />
+        </button>
       </div>
 
       {loading ? (

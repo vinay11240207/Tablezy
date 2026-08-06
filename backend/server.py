@@ -1,43 +1,44 @@
 from dotenv import load_dotenv
 from pathlib import Path
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
 
-import os
-import uuid
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / ".env")
+
+import json
 import logging
+import os
+import re
+import uuid
+from datetime import datetime, timezone, timedelta
+from decimal import Decimal
+from typing import List, Optional, Literal, Any
+
+import asyncpg
 import bcrypt
 import jwt
-from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Literal
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query
+import pandas as pd
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import BaseModel, Field
 
-# ---------- DB ----------
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
-
-JWT_SECRET = os.environ['JWT_SECRET']
+JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGO = "HS256"
-TAX_RATE = float(os.environ.get('TAX_RATE', '0.05'))
-POINTS_PER_RUPEE = float(os.environ.get('POINTS_PER_RUPEE', '0.1'))
-MIN_ORDER_FOR_POINTS = float(os.environ.get('MIN_ORDER_FOR_POINTS', '100'))
+TAX_RATE = float(os.environ.get("TAX_RATE", "0.05"))
+POINTS_PER_RUPEE = float(os.environ.get("POINTS_PER_RUPEE", "0.1"))
+MIN_ORDER_FOR_POINTS = float(os.environ.get("MIN_ORDER_FOR_POINTS", "100"))
+SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_POOLER_URL") or os.environ["SUPABASE_DB_URL"]
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("tablezy")
+logger = logging.getLogger("carolina_lounge")
 
-app = FastAPI(title="Tablezy API")
+app = FastAPI(title="# CAROLINA Lounge API")
 api_router = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
 
 
-# ---------- Helpers ----------
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def hash_pw(pw: str) -> str:
@@ -69,43 +70,95 @@ def decode_token(token: str) -> dict:
         raise HTTPException(401, "Invalid token")
 
 
-async def require_admin(cred: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+def _serialize_value(v: Any):
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, datetime):
+        return v.astimezone(timezone.utc).isoformat()
+    if isinstance(v, list):
+        return [_serialize_value(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _serialize_value(x) for k, x in v.items()}
+    return v
+
+
+def row_to_dict(row: Optional[asyncpg.Record]) -> Optional[dict]:
+    if not row:
+        return None
+    return {k: _serialize_value(v) for k, v in dict(row).items()}
+
+
+def rows_to_dicts(rows: List[asyncpg.Record]) -> List[dict]:
+    return [row_to_dict(r) for r in rows if r is not None]
+
+
+async def db_pool() -> asyncpg.Pool:
+    pool = getattr(app.state, "pool", None)
+    if pool is None:
+        raise HTTPException(500, "Database not initialized")
+    return pool
+
+
+async def require_admin(
+    cred: HTTPAuthorizationCredentials = Depends(security),
+    pool: asyncpg.Pool = Depends(db_pool),
+) -> dict:
     if not cred:
         raise HTTPException(401, "Not authenticated")
     payload = decode_token(cred.credentials)
     if payload.get("role") != "admin":
         raise HTTPException(403, "Admin only")
-    admin = await db.admins.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+    row = await pool.fetchrow(
+        "SELECT id, name, email, role, created_at, updated_at FROM admins WHERE id=$1",
+        payload["sub"],
+    )
+    admin = row_to_dict(row)
     if not admin:
         raise HTTPException(401, "Admin not found")
     return admin
 
 
-async def require_customer(cred: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+async def require_customer(
+    cred: HTTPAuthorizationCredentials = Depends(security),
+    pool: asyncpg.Pool = Depends(db_pool),
+) -> dict:
     if not cred:
         raise HTTPException(401, "Not authenticated")
     payload = decode_token(cred.credentials)
     if payload.get("role") != "customer":
         raise HTTPException(403, "Customer only")
-    c = await db.customers.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
-    if not c:
+    row = await pool.fetchrow(
+        """
+        SELECT id, name, mobile_number, total_points, created_at, updated_at
+        FROM customers WHERE id=$1
+        """,
+        payload["sub"],
+    )
+    customer = row_to_dict(row)
+    if not customer:
         raise HTTPException(401, "Customer not found")
-    return c
+    return customer
 
 
-async def optional_customer(cred: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[dict]:
+async def optional_customer(
+    cred: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    pool: asyncpg.Pool = Depends(db_pool),
+) -> Optional[dict]:
     if not cred:
         return None
     try:
         payload = decode_token(cred.credentials)
         if payload.get("role") != "customer":
             return None
-        return await db.customers.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+        row = await pool.fetchrow(
+            "SELECT id, name, mobile_number, total_points FROM customers WHERE id=$1",
+            payload["sub"],
+        )
+        return row_to_dict(row)
     except Exception:
         return None
 
 
-# ---------- Models ----------
 class AdminLogin(BaseModel):
     email: str
     password: str
@@ -146,11 +199,20 @@ class OrderIn(BaseModel):
     mobile_number: str
     table_number: str
     items: List[OrderItemIn]
-    reward_id: Optional[str] = None  # optional redemption
+    reward_id: Optional[str] = None
 
 
 class StatusUpdate(BaseModel):
-    status: Literal["order_placed", "accepted", "preparing", "ready", "served", "completed", "rejected", "cancelled"]
+    status: Literal[
+        "order_placed",
+        "accepted",
+        "preparing",
+        "ready",
+        "served",
+        "completed",
+        "rejected",
+        "cancelled",
+    ]
 
 
 class RewardIn(BaseModel):
@@ -160,13 +222,397 @@ class RewardIn(BaseModel):
     reward_type: Literal["free_item", "discount"] = "free_item"
     menu_item_id: Optional[str] = None
     discount_amount: float = 0
-    is_active: bool = True
+class SQLitePool:
+    def __init__(self, db_path="carolina_lounge.db"):
+        import sqlite3
+        self.db_path = str(ROOT_DIR / db_path)
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+
+    def _prep_query(self, query: str, args: tuple):
+        q = re.sub(r'\$\d+', '?', query)
+        q = re.sub(r'TIMESTAMPTZ', 'TEXT', q, flags=re.IGNORECASE)
+        q = re.sub(r'JSONB', 'TEXT', q, flags=re.IGNORECASE)
+        q = re.sub(r'NUMERIC\(12,2\)', 'REAL', q, flags=re.IGNORECASE)
+        q = re.sub(r'order_status = ANY\(\$1::text\[\]\)', 'order_status IN (?, ?, ?, ?)', q, flags=re.IGNORECASE)
+        q = re.sub(r'ON CONFLICT\([^)]+\)\s*DO UPDATE SET', 'ON CONFLICT DO UPDATE SET', q, flags=re.IGNORECASE)
+        
+        flat = []
+        for a in args:
+            if isinstance(a, (dict, list)):
+                flat.append(json.dumps(a))
+            elif isinstance(a, datetime):
+                flat.append(a.isoformat())
+            else:
+                flat.append(a)
+        return q, flat
+
+    async def execute(self, query: str, *args):
+        if "TRUNCATE TABLE" in query:
+            cur = self.conn.cursor()
+            for tbl in ["redemptions", "loyalty_transactions", "orders", "rewards", "menu_items", "categories", "customers", "admins"]:
+                try: cur.execute(f"DELETE FROM {tbl}")
+                except Exception: pass
+            self.conn.commit()
+            return "OK"
+        q, flat = self._prep_query(query, args)
+        cur = self.conn.cursor()
+        if not flat and ";" in q:
+            cur.executescript(q)
+        else:
+            cur.execute(q, flat)
+        self.conn.commit()
+        return "OK"
+
+    async def executemany(self, query: str, seq_of_args):
+        cur = self.conn.cursor()
+        for args in seq_of_args:
+            q, flat = self._prep_query(query, args)
+            cur.execute(q, flat)
+        self.conn.commit()
+        return "OK"
+
+    async def fetch(self, query: str, *args):
+        q, flat = self._prep_query(query, args)
+        cur = self.conn.cursor()
+        cur.execute(q, flat)
+        rows = cur.fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            if "items" in d and isinstance(d["items"], str):
+                try: d["items"] = json.loads(d["items"])
+                except Exception: pass
+            result.append(d)
+        return result
+
+    async def fetchrow(self, query: str, *args):
+        rows = await self.fetch(query, *args)
+        return rows[0] if rows else None
+
+    async def fetchval(self, query: str, *args):
+        row = await self.fetchrow(query, *args)
+        if row:
+            return list(row.values())[0]
+        return None
+
+    def acquire(self):
+        ctx = self
+        class ContextManager:
+            async def __aenter__(self):
+                return ctx
+            async def __aexit__(self, exc_type, exc, tb):
+                pass
+        return ContextManager()
+
+    async def close(self):
+        self.conn.close()
 
 
-# ---------- Auth Routes ----------
+async def ensure_schema(pool):
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admins (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'admin',
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ
+            );
+
+            CREATE TABLE IF NOT EXISTS customers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                mobile_number TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                total_points INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ
+            );
+
+            CREATE TABLE IF NOT EXISTS categories (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS menu_items (
+                id TEXT PRIMARY KEY,
+                category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                price NUMERIC(12,2) NOT NULL,
+                image_url TEXT NOT NULL DEFAULT '',
+                is_available BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS rewards (
+                id TEXT PRIMARY KEY,
+                reward_name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                points_required INTEGER NOT NULL,
+                reward_type TEXT NOT NULL,
+                menu_item_id TEXT,
+                discount_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS orders (
+                id TEXT PRIMARY KEY,
+                order_number TEXT NOT NULL UNIQUE,
+                customer_id TEXT,
+                customer_name TEXT NOT NULL,
+                mobile_number TEXT NOT NULL,
+                table_number TEXT NOT NULL,
+                subtotal NUMERIC(12,2) NOT NULL,
+                tax_amount NUMERIC(12,2) NOT NULL,
+                discount_amount NUMERIC(12,2) NOT NULL,
+                total_amount NUMERIC(12,2) NOT NULL,
+                order_status TEXT NOT NULL,
+                points_earned INTEGER NOT NULL DEFAULT 0,
+                points_redeemed INTEGER NOT NULL DEFAULT 0,
+                reward_id TEXT,
+                reward_name TEXT,
+                items JSONB NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS loyalty_transactions (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT NOT NULL,
+                order_id TEXT,
+                transaction_type TEXT NOT NULL,
+                points INTEGER NOT NULL,
+                description TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS redemptions (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT NOT NULL,
+                reward_id TEXT NOT NULL,
+                reward_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(order_status);
+            CREATE INDEX IF NOT EXISTS idx_orders_mobile ON orders(mobile_number);
+            """
+        )
+
+
+async def wipe_all_data(pool: asyncpg.Pool):
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            TRUNCATE TABLE
+              redemptions,
+              loyalty_transactions,
+              orders,
+              rewards,
+              menu_items,
+              categories,
+              customers,
+              admins
+            RESTART IDENTITY;
+            """
+        )
+    logger.info("Wiped all existing data from Supabase tables")
+
+
+def _normalize_column(value: str) -> str:
+    return "".join(ch for ch in str(value).lower().strip() if ch.isalnum())
+
+
+def _pick_column(columns: List[str], aliases: List[str]) -> Optional[str]:
+    normalized = {_normalize_column(c): c for c in columns}
+    for alias in aliases:
+        key = _normalize_column(alias)
+        if key in normalized:
+            return normalized[key]
+    return None
+
+
+def _to_available(value) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip().lower()
+    if text == "":
+        return True
+    return text in {"1", "true", "yes", "y", "available", "active", "in stock", "instock"}
+
+
+async def import_menu_from_excel(pool: asyncpg.Pool):
+    configured = os.environ.get("MENU_XLSX_PATH", "").strip()
+    candidates = []
+    if configured:
+        candidates.append(Path(configured))
+    candidates.extend([
+        ROOT_DIR / "CAROLINA Lounge.xlsx",
+        ROOT_DIR.parent / "CAROLINA Lounge.xlsx",
+        Path("C:/Users/Asus/Documents/CAROLINA Lounge.xlsx"),
+    ])
+
+    excel_path = next((p for p in candidates if p.exists() and p.is_file()), None)
+    if not excel_path:
+        logger.warning("Menu Excel file not found")
+        return
+
+    df = pd.read_excel(excel_path)
+    if df.empty:
+        logger.warning("Menu Excel file is empty: %s", excel_path)
+        return
+
+    if 'category' in df.columns:
+        df['category'] = df['category'].ffill()
+
+    categories_by_name: dict[str, str] = {}
+    category_docs = []
+    item_docs = []
+    now = now_utc()
+
+    for idx, row in df.iterrows():
+        if idx == 0 and "price" in str(row.get("price")).lower():
+            continue  # header description row (veg / non-veg / plain / butter)
+
+        cat_val = row.get("category")
+        name_val = row.get("Item Name ") or row.get("Item Name") or row.get("name")
+        ing_val = row.get("ingredians") or row.get("description") or ""
+
+        if pd.isna(name_val) or not str(name_val).strip() or str(name_val).strip().lower() == "nan":
+            continue
+
+        cat_name = str(cat_val).strip() if pd.notna(cat_val) else "General"
+        item_base_name = str(name_val).strip()
+        description = str(ing_val).strip() if pd.notna(ing_val) and str(ing_val).strip().lower() != "nan" else ""
+
+        veg_price = row.get("price")
+        nonveg_price = row.get("Unnamed: 4")
+        plain_price = row.get("only for bread")
+        butter_price = row.get("Unnamed: 6")
+
+        def _clean_price(val):
+            try:
+                if pd.notna(val):
+                    f = float(val)
+                    if f > 0: return f
+            except Exception: pass
+            return None
+
+        p_veg = _clean_price(veg_price)
+        p_nonveg = _clean_price(nonveg_price)
+        p_plain = _clean_price(plain_price)
+        p_butter = _clean_price(butter_price)
+
+        row_items = []
+        if p_veg is not None and p_nonveg is not None:
+            row_items.append((f"{item_base_name} (Veg)", p_veg))
+            row_items.append((f"{item_base_name} (Non-Veg)", p_nonveg))
+        elif p_veg is not None:
+            row_items.append((item_base_name, p_veg))
+        elif p_nonveg is not None:
+            row_items.append((f"{item_base_name} (Non-Veg)", p_nonveg))
+        elif p_plain is not None and p_butter is not None:
+            clean_b = item_base_name.replace("(Plain/Butter)", "").strip()
+            row_items.append((f"{clean_b} (Plain)", p_plain))
+            row_items.append((f"{clean_b} (Butter)", p_butter))
+        elif p_plain is not None:
+            row_items.append((item_base_name, p_plain))
+        elif p_butter is not None:
+            row_items.append((item_base_name, p_butter))
+
+        for name, price in row_items:
+            if cat_name not in categories_by_name:
+                cid = str(uuid.uuid4())
+                categories_by_name[cat_name] = cid
+                category_docs.append((cid, cat_name, True, now))
+
+            item_docs.append(
+                (
+                    str(uuid.uuid4()),
+                    categories_by_name[cat_name],
+                    name,
+                    description,
+                    round(price, 2),
+                    "",
+                    True,
+                    now,
+                    now,
+                )
+            )
+
+    if not category_docs or not item_docs:
+        logger.warning("No valid menu rows parsed from Excel: %s", excel_path)
+        return
+
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM menu_items")
+        await conn.execute("DELETE FROM categories")
+        await conn.executemany(
+            "INSERT INTO categories(id, name, is_active, created_at) VALUES($1, $2, $3, $4)",
+            category_docs,
+        )
+        await conn.executemany(
+            """
+            INSERT INTO menu_items(id, category_id, name, description, price, image_url, is_available, created_at, updated_at)
+            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            """,
+            item_docs,
+        )
+    logger.info("Successfully imported %s menu items across %s categories into database from %s", len(item_docs), len(category_docs), excel_path)
+
+
+async def seed_startup(pool: asyncpg.Pool):
+    admin_email = os.environ.get("ADMIN_EMAIL", "admin@carolinalounge.com").lower().strip()
+    admin_pw = os.environ.get("ADMIN_PASSWORD", "carolina123")
+
+    now = now_utc()
+    await pool.execute(
+        """
+        INSERT INTO admins(id, name, email, password_hash, role, created_at, updated_at)
+        VALUES($1, $2, $3, $4, 'admin', $5, $6)
+        ON CONFLICT(email) DO UPDATE SET password_hash = EXCLUDED.password_hash, updated_at = EXCLUDED.updated_at
+        """,
+        str(uuid.uuid4()),
+        "Cafe Owner",
+        admin_email,
+        hash_pw(admin_pw),
+        now,
+        now,
+    )
+    logger.info("Ensured admin user: %s", admin_email)
+
+    await import_menu_from_excel(pool)
+
+    rewards_count = await pool.fetchval("SELECT COUNT(*) FROM rewards")
+    if rewards_count == 0:
+        rewards = [
+            (str(uuid.uuid4()), "Free Cold Coffee", "Redeem a chilled cold coffee", 100, "free_item", None, 0.0, True, now),
+            (str(uuid.uuid4()), "Free French Fries", "Crispy golden fries", 150, "free_item", None, 0.0, True, now),
+            (str(uuid.uuid4()), "₹200 Off Order", "Flat ₹200 discount", 500, "discount", None, 200.0, True, now),
+        ]
+        await pool.executemany(
+            """
+            INSERT INTO rewards(id, reward_name, description, points_required, reward_type, menu_item_id, discount_amount, is_active, created_at)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+            """,
+            rewards,
+        )
+
+
 @api_router.post("/auth/admin/login")
-async def admin_login(body: AdminLogin):
-    admin = await db.admins.find_one({"email": body.email.lower().strip()})
+async def admin_login(body: AdminLogin, pool: asyncpg.Pool = Depends(db_pool)):
+    admin = await pool.fetchrow("SELECT * FROM admins WHERE email=$1", body.email.lower().strip())
     if not admin or not verify_pw(body.password, admin["password_hash"]):
         raise HTTPException(401, "Invalid credentials")
     token = make_token(admin["id"], "admin")
@@ -176,74 +622,89 @@ async def admin_login(body: AdminLogin):
     }
 
 
-async def _backfill_guest_orders(customer_id: str, mobile: str):
-    """Link any past guest orders (same mobile, no customer_id) to this customer."""
-    await db.orders.update_many(
-        {"mobile_number": mobile, "customer_id": None},
-        {"$set": {"customer_id": customer_id, "updated_at": now_iso()}},
+async def _backfill_guest_orders(pool: asyncpg.Pool, customer_id: str, mobile: str):
+    await pool.execute(
+        "UPDATE orders SET customer_id=$1, updated_at=$2 WHERE mobile_number=$3 AND customer_id IS NULL",
+        customer_id,
+        now_utc(),
+        mobile,
     )
 
 
 @api_router.post("/auth/customer/register")
-async def customer_register(body: CustomerRegister):
+async def customer_register(body: CustomerRegister, pool: asyncpg.Pool = Depends(db_pool)):
     mobile = body.mobile_number.strip()
     if len(mobile) < 8:
         raise HTTPException(400, "Invalid mobile number")
-    existing = await db.customers.find_one({"mobile_number": mobile})
+
+    existing = await pool.fetchrow("SELECT id FROM customers WHERE mobile_number=$1", mobile)
     if existing:
         raise HTTPException(400, "Mobile number already registered")
+
     cid = str(uuid.uuid4())
-    doc = {
-        "id": cid,
-        "name": body.name.strip(),
-        "mobile_number": mobile,
-        "password_hash": hash_pw(body.password),
-        "total_points": 0,
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
-    }
-    await db.customers.insert_one(doc)
-    await _backfill_guest_orders(cid, mobile)
+    now = now_utc()
+    await pool.execute(
+        """
+        INSERT INTO customers(id, name, mobile_number, password_hash, total_points, created_at, updated_at)
+        VALUES($1, $2, $3, $4, 0, $5, $6)
+        """,
+        cid,
+        body.name.strip(),
+        mobile,
+        hash_pw(body.password),
+        now,
+        now,
+    )
+    await _backfill_guest_orders(pool, cid, mobile)
     token = make_token(cid, "customer")
     return {
         "token": token,
-        "user": {"id": cid, "name": doc["name"], "mobile_number": mobile, "total_points": 0},
+        "user": {"id": cid, "name": body.name.strip(), "mobile_number": mobile, "total_points": 0},
     }
 
 
 @api_router.post("/auth/customer/login")
-async def customer_login(body: CustomerLogin):
+async def customer_login(body: CustomerLogin, pool: asyncpg.Pool = Depends(db_pool)):
     mobile = body.mobile_number.strip()
-    c = await db.customers.find_one({"mobile_number": mobile})
+    c = await pool.fetchrow("SELECT * FROM customers WHERE mobile_number=$1", mobile)
     if not c or not verify_pw(body.password, c["password_hash"]):
         raise HTTPException(401, "Invalid credentials")
-    await _backfill_guest_orders(c["id"], mobile)
+    await _backfill_guest_orders(pool, c["id"], mobile)
     token = make_token(c["id"], "customer")
     return {
         "token": token,
-        "user": {"id": c["id"], "name": c["name"], "mobile_number": c["mobile_number"], "total_points": c.get("total_points", 0)},
+        "user": {
+            "id": c["id"],
+            "name": c["name"],
+            "mobile_number": c["mobile_number"],
+            "total_points": c["total_points"],
+        },
     }
 
 
-# ---------- Admin: Customers ----------
 @api_router.get("/customers")
-async def list_customers(admin: dict = Depends(require_admin)):
-    customers = await db.customers.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(1000)
-    # aggregate order counts in a single query to avoid N+1
-    counts = {}
-    async for row in db.orders.aggregate([
-        {"$match": {"customer_id": {"$ne": None}}},
-        {"$group": {"_id": "$customer_id", "n": {"$sum": 1}}},
-    ]):
-        counts[row["_id"]] = row["n"]
-    for c in customers:
-        c["orders_count"] = counts.get(c["id"], 0)
-    return customers
+async def list_customers(admin: dict = Depends(require_admin), pool: asyncpg.Pool = Depends(db_pool)):
+    rows = await pool.fetch(
+        """
+        SELECT c.id, c.name, c.mobile_number, c.total_points, c.created_at, c.updated_at,
+               COALESCE(o.orders_count, 0) AS orders_count
+        FROM customers c
+        LEFT JOIN (
+            SELECT customer_id, COUNT(*) AS orders_count
+            FROM orders
+            WHERE customer_id IS NOT NULL
+            GROUP BY customer_id
+        ) o ON o.customer_id = c.id
+        ORDER BY c.created_at DESC
+        """
+    )
+    return rows_to_dicts(rows)
 
 
 @api_router.get("/customers/{cid}/orders")
-async def customer_admin_orders(cid: str, admin: dict = Depends(require_admin)):
-    return await db.orders.find({"customer_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(500)
+async def customer_admin_orders(cid: str, admin: dict = Depends(require_admin), pool: asyncpg.Pool = Depends(db_pool)):
+    rows = await pool.fetch("SELECT * FROM orders WHERE customer_id=$1 ORDER BY created_at DESC", cid)
+    return rows_to_dicts(rows)
 
 
 @api_router.get("/auth/me")
@@ -253,140 +714,246 @@ async def get_admin_me(admin: dict = Depends(require_admin)):
 
 @api_router.get("/auth/customer/me")
 async def get_customer_me(c: dict = Depends(require_customer)):
-    return {"user": {"id": c["id"], "name": c["name"], "mobile_number": c["mobile_number"], "total_points": c.get("total_points", 0)}}
+    return {
+        "user": {
+            "id": c["id"],
+            "name": c["name"],
+            "mobile_number": c["mobile_number"],
+            "total_points": c.get("total_points", 0),
+        }
+    }
 
 
-# ---------- Categories ----------
 @api_router.get("/categories")
-async def list_categories():
-    docs = await db.categories.find({}, {"_id": 0}).sort("name", 1).to_list(500)
-    return docs
+async def list_categories(pool: asyncpg.Pool = Depends(db_pool)):
+    rows = await pool.fetch("SELECT * FROM categories ORDER BY name ASC")
+    return rows_to_dicts(rows)
 
 
 @api_router.post("/categories")
-async def create_category(body: CategoryIn, admin: dict = Depends(require_admin)):
+async def create_category(body: CategoryIn, admin: dict = Depends(require_admin), pool: asyncpg.Pool = Depends(db_pool)):
     cid = str(uuid.uuid4())
-    doc = {"id": cid, "name": body.name.strip(), "is_active": body.is_active, "created_at": now_iso()}
-    await db.categories.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
+    now = now_utc()
+    await pool.execute(
+        "INSERT INTO categories(id, name, is_active, created_at) VALUES($1, $2, $3, $4)",
+        cid,
+        body.name.strip(),
+        body.is_active,
+        now,
+    )
+    row = await pool.fetchrow("SELECT * FROM categories WHERE id=$1", cid)
+    return row_to_dict(row)
 
 
 @api_router.delete("/categories/{cid}")
-async def delete_category(cid: str, admin: dict = Depends(require_admin)):
-    await db.categories.delete_one({"id": cid})
+async def delete_category(cid: str, admin: dict = Depends(require_admin), pool: asyncpg.Pool = Depends(db_pool)):
+    await pool.execute("DELETE FROM categories WHERE id=$1", cid)
     return {"ok": True}
 
 
-# ---------- Menu ----------
 @api_router.get("/menu")
-async def get_menu(only_available: bool = False):
-    q = {"is_available": True} if only_available else {}
-    items = await db.menu_items.find(q, {"_id": 0}).to_list(1000)
-    cats = await db.categories.find({}, {"_id": 0}).sort("name", 1).to_list(500)
-    return {"items": items, "categories": cats}
+async def get_menu(only_available: bool = False, pool: asyncpg.Pool = Depends(db_pool)):
+    if only_available:
+        items = await pool.fetch("SELECT * FROM menu_items WHERE is_available=TRUE")
+    else:
+        items = await pool.fetch("SELECT * FROM menu_items")
+    cats = await pool.fetch("SELECT * FROM categories ORDER BY name ASC")
+    return {"items": rows_to_dicts(items), "categories": rows_to_dicts(cats)}
 
 
 @api_router.post("/menu")
-async def create_menu_item(body: MenuItemIn, admin: dict = Depends(require_admin)):
+async def create_menu_item(body: MenuItemIn, admin: dict = Depends(require_admin), pool: asyncpg.Pool = Depends(db_pool)):
     mid = str(uuid.uuid4())
-    doc = {
-        "id": mid, "category_id": body.category_id, "name": body.name.strip(),
-        "description": body.description, "price": float(body.price),
-        "image_url": body.image_url, "is_available": body.is_available,
-        "created_at": now_iso(), "updated_at": now_iso(),
-    }
-    await db.menu_items.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
+    now = now_utc()
+    await pool.execute(
+        """
+        INSERT INTO menu_items(id, category_id, name, description, price, image_url, is_available, created_at, updated_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        """,
+        mid,
+        body.category_id,
+        body.name.strip(),
+        body.description,
+        float(body.price),
+        body.image_url,
+        body.is_available,
+        now,
+        now,
+    )
+    row = await pool.fetchrow("SELECT * FROM menu_items WHERE id=$1", mid)
+    return row_to_dict(row)
 
 
 @api_router.put("/menu/{mid}")
-async def update_menu_item(mid: str, body: MenuItemIn, admin: dict = Depends(require_admin)):
-    update = body.model_dump()
-    update["price"] = float(update["price"])
-    update["updated_at"] = now_iso()
-    r = await db.menu_items.update_one({"id": mid}, {"$set": update})
-    if r.matched_count == 0:
+async def update_menu_item(mid: str, body: MenuItemIn, admin: dict = Depends(require_admin), pool: asyncpg.Pool = Depends(db_pool)):
+    status = await pool.execute(
+        """
+        UPDATE menu_items
+        SET category_id=$1, name=$2, description=$3, price=$4, image_url=$5, is_available=$6, updated_at=$7
+        WHERE id=$8
+        """,
+        body.category_id,
+        body.name.strip(),
+        body.description,
+        float(body.price),
+        body.image_url,
+        body.is_available,
+        now_utc(),
+        mid,
+    )
+    if status.endswith("0"):
         raise HTTPException(404, "Not found")
-    return await db.menu_items.find_one({"id": mid}, {"_id": 0})
+    row = await pool.fetchrow("SELECT * FROM menu_items WHERE id=$1", mid)
+    return row_to_dict(row)
 
 
 @api_router.patch("/menu/{mid}/availability")
-async def toggle_availability(mid: str, is_available: bool, admin: dict = Depends(require_admin)):
-    await db.menu_items.update_one({"id": mid}, {"$set": {"is_available": is_available, "updated_at": now_iso()}})
-    return await db.menu_items.find_one({"id": mid}, {"_id": 0})
+async def toggle_availability(
+    mid: str,
+    is_available: bool,
+    admin: dict = Depends(require_admin),
+    pool: asyncpg.Pool = Depends(db_pool),
+):
+    await pool.execute(
+        "UPDATE menu_items SET is_available=$1, updated_at=$2 WHERE id=$3",
+        is_available,
+        now_utc(),
+        mid,
+    )
+    row = await pool.fetchrow("SELECT * FROM menu_items WHERE id=$1", mid)
+    return row_to_dict(row)
 
 
 @api_router.delete("/menu/{mid}")
-async def delete_menu_item(mid: str, admin: dict = Depends(require_admin)):
-    await db.menu_items.delete_one({"id": mid})
+async def delete_menu_item(mid: str, admin: dict = Depends(require_admin), pool: asyncpg.Pool = Depends(db_pool)):
+    await pool.execute("DELETE FROM menu_items WHERE id=$1", mid)
     return {"ok": True}
 
 
-# ---------- Rewards ----------
 @api_router.get("/rewards")
-async def list_rewards(active_only: bool = False):
-    q = {"is_active": True} if active_only else {}
-    return await db.rewards.find(q, {"_id": 0}).to_list(500)
+async def list_rewards(active_only: bool = False, pool: asyncpg.Pool = Depends(db_pool)):
+    if active_only:
+        rows = await pool.fetch("SELECT * FROM rewards WHERE is_active=TRUE")
+    else:
+        rows = await pool.fetch("SELECT * FROM rewards")
+    return rows_to_dicts(rows)
 
 
 @api_router.post("/rewards")
-async def create_reward(body: RewardIn, admin: dict = Depends(require_admin)):
+async def create_reward(body: RewardIn, admin: dict = Depends(require_admin), pool: asyncpg.Pool = Depends(db_pool)):
     rid = str(uuid.uuid4())
-    doc = {"id": rid, **body.model_dump(), "created_at": now_iso()}
-    await db.rewards.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
+    await pool.execute(
+        """
+        INSERT INTO rewards(id, reward_name, description, points_required, reward_type, menu_item_id, discount_amount, is_active, created_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        """,
+        rid,
+        body.reward_name,
+        body.description,
+        body.points_required,
+        body.reward_type,
+        body.menu_item_id,
+        float(body.discount_amount),
+        body.is_active,
+        now_utc(),
+    )
+    row = await pool.fetchrow("SELECT * FROM rewards WHERE id=$1", rid)
+    return row_to_dict(row)
 
 
 @api_router.put("/rewards/{rid}")
-async def update_reward(rid: str, body: RewardIn, admin: dict = Depends(require_admin)):
-    r = await db.rewards.update_one({"id": rid}, {"$set": body.model_dump()})
-    if r.matched_count == 0:
+async def update_reward(rid: str, body: RewardIn, admin: dict = Depends(require_admin), pool: asyncpg.Pool = Depends(db_pool)):
+    status = await pool.execute(
+        """
+        UPDATE rewards
+        SET reward_name=$1, description=$2, points_required=$3, reward_type=$4, menu_item_id=$5, discount_amount=$6, is_active=$7
+        WHERE id=$8
+        """,
+        body.reward_name,
+        body.description,
+        body.points_required,
+        body.reward_type,
+        body.menu_item_id,
+        float(body.discount_amount),
+        body.is_active,
+        rid,
+    )
+    if status.endswith("0"):
         raise HTTPException(404, "Not found")
-    return await db.rewards.find_one({"id": rid}, {"_id": 0})
+    row = await pool.fetchrow("SELECT * FROM rewards WHERE id=$1", rid)
+    return row_to_dict(row)
 
 
 @api_router.delete("/rewards/{rid}")
-async def delete_reward(rid: str, admin: dict = Depends(require_admin)):
-    await db.rewards.delete_one({"id": rid})
+async def delete_reward(rid: str, admin: dict = Depends(require_admin), pool: asyncpg.Pool = Depends(db_pool)):
+    await pool.execute("DELETE FROM rewards WHERE id=$1", rid)
     return {"ok": True}
 
 
 @api_router.post("/rewards/{rid}/redeem")
-async def redeem_reward(rid: str, c: dict = Depends(require_customer)):
-    reward = await db.rewards.find_one({"id": rid, "is_active": True})
+async def redeem_reward(rid: str, c: dict = Depends(require_customer), pool: asyncpg.Pool = Depends(db_pool)):
+    reward = await pool.fetchrow("SELECT * FROM rewards WHERE id=$1 AND is_active=TRUE", rid)
     if not reward:
         raise HTTPException(404, "Reward not found")
     if c.get("total_points", 0) < reward["points_required"]:
         raise HTTPException(400, "Insufficient points")
-    new_points = c["total_points"] - reward["points_required"]
-    await db.customers.update_one({"id": c["id"]}, {"$set": {"total_points": new_points, "updated_at": now_iso()}})
-    tx = {
-        "id": str(uuid.uuid4()), "customer_id": c["id"], "order_id": None,
-        "transaction_type": "redeemed", "points": -reward["points_required"],
-        "description": f"Redeemed: {reward['reward_name']}", "created_at": now_iso(),
-    }
-    await db.loyalty_transactions.insert_one(tx)
+
+    new_points = int(c["total_points"]) - int(reward["points_required"])
+    await pool.execute(
+        "UPDATE customers SET total_points=$1, updated_at=$2 WHERE id=$3",
+        new_points,
+        now_utc(),
+        c["id"],
+    )
+
+    await pool.execute(
+        """
+        INSERT INTO loyalty_transactions(id, customer_id, order_id, transaction_type, points, description, created_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7)
+        """,
+        str(uuid.uuid4()),
+        c["id"],
+        None,
+        "redeemed",
+        -int(reward["points_required"]),
+        f"Redeemed: {reward['reward_name']}",
+        now_utc(),
+    )
+
     redemption = {
-        "id": str(uuid.uuid4()), "customer_id": c["id"], "reward_id": rid,
-        "reward_name": reward["reward_name"], "status": "issued",
-        "created_at": now_iso(),
+        "id": str(uuid.uuid4()),
+        "customer_id": c["id"],
+        "reward_id": rid,
+        "reward_name": reward["reward_name"],
+        "status": "issued",
+        "created_at": now_utc().isoformat(),
     }
-    await db.redemptions.insert_one(redemption)
-    redemption.pop("_id", None)
+    await pool.execute(
+        """
+        INSERT INTO redemptions(id, customer_id, reward_id, reward_name, status, created_at)
+        VALUES($1,$2,$3,$4,$5,$6)
+        """,
+        redemption["id"],
+        redemption["customer_id"],
+        redemption["reward_id"],
+        redemption["reward_name"],
+        redemption["status"],
+        now_utc(),
+    )
     return {"redemption": redemption, "new_balance": new_points}
 
 
-# ---------- Orders ----------
-async def _generate_order_number() -> str:
-    count = await db.orders.count_documents({})
-    return f"ORD{1000 + count + 1}"
+async def _generate_order_number(pool: asyncpg.Pool) -> str:
+    count = await pool.fetchval("SELECT COUNT(*) FROM orders")
+    return f"ORD{1000 + int(count) + 1}"
 
 
 @api_router.post("/orders")
-async def create_order(body: OrderIn, current: Optional[dict] = Depends(optional_customer)):
+async def create_order(
+    body: OrderIn,
+    current: Optional[dict] = Depends(optional_customer),
+    pool: asyncpg.Pool = Depends(db_pool),
+):
     if not body.items:
         raise HTTPException(400, "Cart is empty")
     if not body.customer_name.strip() or not body.mobile_number.strip() or not body.table_number.strip():
@@ -395,22 +962,28 @@ async def create_order(body: OrderIn, current: Optional[dict] = Depends(optional
     subtotal = 0.0
     order_items = []
     for it in body.items:
-        mi = await db.menu_items.find_one({"id": it.menu_item_id}, {"_id": 0})
+        mi = await pool.fetchrow("SELECT * FROM menu_items WHERE id=$1", it.menu_item_id)
         if not mi:
             raise HTTPException(400, f"Item not found: {it.menu_item_id}")
-        if not mi.get("is_available"):
+        if not mi["is_available"]:
             raise HTTPException(400, f"Item unavailable: {mi['name']}")
         line = float(mi["price"]) * int(it.quantity)
         subtotal += line
-        order_items.append({
-            "id": str(uuid.uuid4()), "menu_item_id": mi["id"], "item_name": mi["name"],
-            "item_price": float(mi["price"]), "quantity": int(it.quantity), "item_total": line,
-        })
+        order_items.append(
+            {
+                "id": str(uuid.uuid4()),
+                "menu_item_id": mi["id"],
+                "item_name": mi["name"],
+                "item_price": float(mi["price"]),
+                "quantity": int(it.quantity),
+                "item_total": line,
+            }
+        )
 
     reward_discount = 0.0
     reward_applied = None
     if body.reward_id and current:
-        reward = await db.rewards.find_one({"id": body.reward_id, "is_active": True})
+        reward = await pool.fetchrow("SELECT * FROM rewards WHERE id=$1 AND is_active=TRUE", body.reward_id)
         if not reward:
             raise HTTPException(400, "Invalid reward")
         if current.get("total_points", 0) < reward["points_required"]:
@@ -422,15 +995,18 @@ async def create_order(body: OrderIn, current: Optional[dict] = Depends(optional
     tax = round(subtotal * TAX_RATE, 2)
     total = round(max(0, subtotal + tax - reward_discount), 2)
 
-    onum = await _generate_order_number()
+    onum = await _generate_order_number(pool)
     oid = str(uuid.uuid4())
+    now = now_utc()
     order = {
-        "id": oid, "order_number": onum,
+        "id": oid,
+        "order_number": onum,
         "customer_id": current["id"] if current else None,
         "customer_name": body.customer_name.strip(),
         "mobile_number": body.mobile_number.strip(),
         "table_number": body.table_number.strip(),
-        "subtotal": round(subtotal, 2), "tax_amount": tax,
+        "subtotal": round(subtotal, 2),
+        "tax_amount": tax,
         "discount_amount": reward_discount,
         "total_amount": total,
         "order_status": "order_placed",
@@ -439,28 +1015,67 @@ async def create_order(body: OrderIn, current: Optional[dict] = Depends(optional
         "reward_id": body.reward_id if reward_applied else None,
         "reward_name": reward_applied["reward_name"] if reward_applied else None,
         "items": order_items,
-        "created_at": now_iso(), "updated_at": now_iso(),
+        "created_at": now,
+        "updated_at": now,
     }
-    await db.orders.insert_one(order)
+
+    await pool.execute(
+        """
+        INSERT INTO orders(id, order_number, customer_id, customer_name, mobile_number, table_number, subtotal, tax_amount, discount_amount, total_amount,
+                           order_status, points_earned, points_redeemed, reward_id, reward_name, items, created_at, updated_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18)
+        """,
+        order["id"],
+        order["order_number"],
+        order["customer_id"],
+        order["customer_name"],
+        order["mobile_number"],
+        order["table_number"],
+        order["subtotal"],
+        order["tax_amount"],
+        order["discount_amount"],
+        order["total_amount"],
+        order["order_status"],
+        order["points_earned"],
+        order["points_redeemed"],
+        order["reward_id"],
+        order["reward_name"],
+        json.dumps(order["items"]),
+        order["created_at"],
+        order["updated_at"],
+    )
 
     if reward_applied:
-        await db.customers.update_one(
-            {"id": current["id"]},
-            {"$inc": {"total_points": -reward_applied["points_required"]}, "$set": {"updated_at": now_iso()}},
+        await pool.execute(
+            "UPDATE customers SET total_points = total_points - $1, updated_at=$2 WHERE id=$3",
+            int(reward_applied["points_required"]),
+            now,
+            current["id"],
         )
-        await db.loyalty_transactions.insert_one({
-            "id": str(uuid.uuid4()), "customer_id": current["id"], "order_id": oid,
-            "transaction_type": "redeemed", "points": -reward_applied["points_required"],
-            "description": f"Redeemed on order {onum}", "created_at": now_iso(),
-        })
+        await pool.execute(
+            """
+            INSERT INTO loyalty_transactions(id, customer_id, order_id, transaction_type, points, description, created_at)
+            VALUES($1,$2,$3,$4,$5,$6,$7)
+            """,
+            str(uuid.uuid4()),
+            current["id"],
+            oid,
+            "redeemed",
+            -int(reward_applied["points_required"]),
+            f"Redeemed on order {onum}",
+            now,
+        )
 
-    order.pop("_id", None)
-    return order
+    out = order.copy()
+    out["created_at"] = out["created_at"].isoformat()
+    out["updated_at"] = out["updated_at"].isoformat()
+    return out
 
 
 @api_router.get("/orders/{oid}")
-async def get_order(oid: str):
-    o = await db.orders.find_one({"id": oid}, {"_id": 0})
+async def get_order(oid: str, pool: asyncpg.Pool = Depends(db_pool)):
+    row = await pool.fetchrow("SELECT * FROM orders WHERE id=$1", oid)
+    o = row_to_dict(row)
     if not o:
         raise HTTPException(404, "Not found")
     return o
@@ -473,174 +1088,171 @@ async def list_orders(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     admin: dict = Depends(require_admin),
+    pool: asyncpg.Pool = Depends(db_pool),
 ):
-    q = {}
+    params = []
+    where = []
+
     pending = ["order_placed", "accepted", "preparing", "ready", "served"]
     if status_group == "active":
-        q["order_status"] = {"$in": pending}
+        params.append(pending)
+        where.append(f"order_status = ANY(${len(params)}::text[])")
     elif status_group == "history":
-        q["order_status"] = {"$in": ["completed", "rejected", "cancelled"]}
+        params.append(["completed", "rejected", "cancelled"])
+        where.append(f"order_status = ANY(${len(params)}::text[])")
+
     if search:
-        q["$or"] = [
-            {"order_number": {"$regex": search, "$options": "i"}},
-            {"customer_name": {"$regex": search, "$options": "i"}},
-            {"mobile_number": {"$regex": search, "$options": "i"}},
-            {"table_number": {"$regex": search, "$options": "i"}},
-        ]
+        params.append(f"%{search}%")
+        idx = len(params)
+        where.append(
+            f"(order_number ILIKE ${idx} OR customer_name ILIKE ${idx} OR mobile_number ILIKE ${idx} OR table_number ILIKE ${idx})"
+        )
+
     if start_date:
-        q.setdefault("created_at", {})["$gte"] = start_date
+        params.append(start_date)
+        where.append(f"created_at::date >= ${len(params)}::date")
     if end_date:
-        q.setdefault("created_at", {})["$lte"] = end_date
-    orders = await db.orders.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    return orders
+        params.append(end_date)
+        where.append(f"created_at::date <= ${len(params)}::date")
+
+    where_sql = ""
+    if where:
+        where_sql = "WHERE " + " AND ".join(where)
+
+    rows = await pool.fetch(f"SELECT * FROM orders {where_sql} ORDER BY created_at DESC", *params)
+    return rows_to_dicts(rows)
 
 
 @api_router.patch("/orders/{oid}/status")
-async def update_status(oid: str, body: StatusUpdate, admin: dict = Depends(require_admin)):
-    o = await db.orders.find_one({"id": oid})
+async def update_status(oid: str, body: StatusUpdate, admin: dict = Depends(require_admin), pool: asyncpg.Pool = Depends(db_pool)):
+    o = await pool.fetchrow("SELECT * FROM orders WHERE id=$1", oid)
     if not o:
         raise HTTPException(404, "Not found")
-    update = {"order_status": body.status, "updated_at": now_iso()}
 
-    # credit points on completion
+    points_earned = int(o.get("points_earned") or 0)
+    now = now_utc()
+
     if body.status == "completed" and o["order_status"] != "completed":
-        if o.get("customer_id") and o.get("subtotal", 0) >= MIN_ORDER_FOR_POINTS:
-            pts = int(o["subtotal"] * POINTS_PER_RUPEE)
-            update["points_earned"] = pts
-            await db.customers.update_one(
-                {"id": o["customer_id"]},
-                {"$inc": {"total_points": pts}, "$set": {"updated_at": now_iso()}},
+        if o.get("customer_id") and float(o.get("subtotal", 0)) >= MIN_ORDER_FOR_POINTS:
+            pts = int(float(o["subtotal"]) * POINTS_PER_RUPEE)
+            points_earned = pts
+            await pool.execute(
+                "UPDATE customers SET total_points = total_points + $1, updated_at=$2 WHERE id=$3",
+                pts,
+                now,
+                o["customer_id"],
             )
-            await db.loyalty_transactions.insert_one({
-                "id": str(uuid.uuid4()), "customer_id": o["customer_id"], "order_id": oid,
-                "transaction_type": "earned", "points": pts,
-                "description": f"Earned on order {o['order_number']}", "created_at": now_iso(),
-            })
-    await db.orders.update_one({"id": oid}, {"$set": update})
-    return await db.orders.find_one({"id": oid}, {"_id": 0})
+            await pool.execute(
+                """
+                INSERT INTO loyalty_transactions(id, customer_id, order_id, transaction_type, points, description, created_at)
+                VALUES($1,$2,$3,$4,$5,$6,$7)
+                """,
+                str(uuid.uuid4()),
+                o["customer_id"],
+                oid,
+                "earned",
+                pts,
+                f"Earned on order {o['order_number']}",
+                now,
+            )
+
+    await pool.execute(
+        "UPDATE orders SET order_status=$1, points_earned=$2, updated_at=$3 WHERE id=$4",
+        body.status,
+        points_earned,
+        now,
+        oid,
+    )
+    row = await pool.fetchrow("SELECT * FROM orders WHERE id=$1", oid)
+    return row_to_dict(row)
 
 
-# ---------- Customer-specific ----------
 @api_router.get("/customer/orders")
-async def customer_orders(c: dict = Depends(require_customer)):
-    return await db.orders.find({"customer_id": c["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
+async def customer_orders(c: dict = Depends(require_customer), pool: asyncpg.Pool = Depends(db_pool)):
+    rows = await pool.fetch("SELECT * FROM orders WHERE customer_id=$1 ORDER BY created_at DESC", c["id"])
+    return rows_to_dicts(rows)
 
 
 @api_router.get("/customer/points-history")
-async def points_history(c: dict = Depends(require_customer)):
-    return await db.loyalty_transactions.find({"customer_id": c["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
+async def points_history(c: dict = Depends(require_customer), pool: asyncpg.Pool = Depends(db_pool)):
+    rows = await pool.fetch(
+        "SELECT * FROM loyalty_transactions WHERE customer_id=$1 ORDER BY created_at DESC",
+        c["id"],
+    )
+    return rows_to_dicts(rows)
 
 
-# ---------- Dashboard Stats ----------
 @api_router.get("/dashboard/stats")
-async def dashboard_stats(admin: dict = Depends(require_admin)):
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+async def dashboard_stats(admin: dict = Depends(require_admin), pool: asyncpg.Pool = Depends(db_pool)):
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    stats_proj = {"_id": 0, "total_amount": 1, "order_status": 1}
-    todays_orders = await db.orders.find({"created_at": {"$gte": today_start}}, stats_proj).to_list(2000)
-    monthly_orders = await db.orders.find({"created_at": {"$gte": month_start}}, stats_proj).to_list(5000)
-    pending_orders = await db.orders.count_documents({"order_status": {"$in": ["order_placed", "accepted", "preparing", "ready"]}})
+    todays_orders = rows_to_dicts(
+        await pool.fetch("SELECT total_amount, order_status FROM orders WHERE created_at >= $1", today_start)
+    )
+    monthly_orders = rows_to_dicts(
+        await pool.fetch("SELECT total_amount, order_status FROM orders WHERE created_at >= $1", month_start)
+    )
+    pending_orders = await pool.fetchval(
+        "SELECT COUNT(*) FROM orders WHERE order_status = ANY($1::text[])",
+        ["order_placed", "accepted", "preparing", "ready"],
+    )
     completed_today = [o for o in todays_orders if o["order_status"] == "completed"]
 
-    todays_sales = sum(o["total_amount"] for o in completed_today)
-    monthly_sales = sum(o["total_amount"] for o in monthly_orders if o["order_status"] == "completed")
+    todays_sales = sum(float(o["total_amount"]) for o in completed_today)
+    monthly_sales = sum(float(o["total_amount"]) for o in monthly_orders if o["order_status"] == "completed")
 
-    recent = await db.orders.find({}, {"_id": 0}).sort("created_at", -1).limit(8).to_list(8)
+    recent = rows_to_dicts(await pool.fetch("SELECT * FROM orders ORDER BY created_at DESC LIMIT 8"))
     return {
         "todays_sales": round(todays_sales, 2),
         "orders_today": len(todays_orders),
         "monthly_sales": round(monthly_sales, 2),
-        "pending_orders": pending_orders,
+        "pending_orders": int(pending_orders or 0),
         "completed_today": len(completed_today),
         "recent_orders": recent,
     }
 
 
-# ---------- Seed ----------
-async def seed_startup():
-    # indexes
-    await db.customers.create_index("mobile_number", unique=True)
-    await db.admins.create_index("email", unique=True)
-    await db.orders.create_index("order_number", unique=True)
-    await db.orders.create_index("created_at")
-
-    # admin
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@tablezy.com").lower()
-    admin_pw = os.environ.get("ADMIN_PASSWORD", "admin123")
-    existing = await db.admins.find_one({"email": admin_email})
-    if not existing:
-        await db.admins.insert_one({
-            "id": str(uuid.uuid4()), "name": "Cafe Owner", "email": admin_email,
-            "password_hash": hash_pw(admin_pw), "role": "admin", "created_at": now_iso(),
-        })
-        logger.info(f"Seeded admin: {admin_email}")
-
-    # seed categories if empty
-    if await db.categories.count_documents({}) == 0:
-        default_cats = ["Coffee", "Tea", "Pizza", "Burger", "Sandwich", "Pasta", "Shakes", "Snacks", "Desserts"]
-        docs = [{"id": str(uuid.uuid4()), "name": n, "is_active": True, "created_at": now_iso()} for n in default_cats]
-        await db.categories.insert_many(docs)
-        logger.info("Seeded default categories")
-
-    # seed sample menu if empty
-    if await db.menu_items.count_documents({}) == 0:
-        cats = await db.categories.find({}, {"_id": 0}).to_list(50)
-        cmap = {c["name"]: c["id"] for c in cats}
-        samples = [
-            ("Coffee", "Cappuccino", "Rich espresso topped with velvety foam", 140,
-             "https://images.unsplash.com/photo-1529892485617-25f63cd7b1e9?w=600&auto=format&fit=crop"),
-            ("Coffee", "Cold Brew", "Slow-steeped, smooth and refreshing", 180,
-             "https://images.unsplash.com/photo-1461023058943-07fcbe16d735?w=600&auto=format&fit=crop"),
-            ("Pizza", "Margherita", "Fresh basil, mozzarella, tomato sauce", 320,
-             "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?w=600&auto=format&fit=crop"),
-            ("Burger", "Classic Cheeseburger", "Grilled patty, cheddar, house sauce", 260, ""),
-            ("Desserts", "Chocolate Croissant", "Buttery flaky pastry with dark chocolate", 120,
-             "https://images.unsplash.com/photo-1623334044303-241021148842?w=600&auto=format&fit=crop"),
-            ("Shakes", "Cold Coffee Shake", "Frothy, iced, indulgent", 190, ""),
-        ]
-        docs = []
-        for cat, name, desc, price, img in samples:
-            if cat in cmap:
-                docs.append({
-                    "id": str(uuid.uuid4()), "category_id": cmap[cat], "name": name,
-                    "description": desc, "price": price, "image_url": img,
-                    "is_available": True, "created_at": now_iso(), "updated_at": now_iso(),
-                })
-        if docs:
-            await db.menu_items.insert_many(docs)
-            logger.info(f"Seeded {len(docs)} menu items")
-
-    # seed rewards if empty
-    if await db.rewards.count_documents({}) == 0:
-        rewards = [
-            {"reward_name": "Free Cold Coffee", "description": "Redeem a chilled cold coffee", "points_required": 100, "reward_type": "free_item"},
-            {"reward_name": "Free French Fries", "description": "Crispy golden fries", "points_required": 150, "reward_type": "free_item"},
-            {"reward_name": "₹200 Off Order", "description": "Flat ₹200 discount", "points_required": 500, "reward_type": "discount", "discount_amount": 200},
-        ]
-        for r in rewards:
-            r.update({"id": str(uuid.uuid4()), "menu_item_id": None, "is_active": True, "created_at": now_iso()})
-        await db.rewards.insert_many(rewards)
-
-
 @app.on_event("startup")
 async def startup():
-    await seed_startup()
+    import asyncio
+    pool = None
+    try:
+        pool = await asyncio.wait_for(
+            asyncpg.create_pool(SUPABASE_DB_URL, min_size=1, max_size=10, ssl="require"),
+            timeout=3.0
+        )
+        logger.info("Connected to Supabase PostgreSQL database successfully")
+    except Exception as e:
+        logger.warning(f"Could not connect to Supabase DB ({e}). Falling back to local SQLite database: carolina_lounge.db")
+        pool = SQLitePool("carolina_lounge.db")
+    app.state.pool = pool
+
+    await ensure_schema(pool)
+
+    if os.environ.get("WIPE_ALL_DATA_ON_STARTUP", "true").lower() == "true":
+        await wipe_all_data(pool)
+
+    await seed_startup(pool)
 
 
 @api_router.get("/")
 async def root():
-    return {"service": "Tablezy API", "status": "ok"}
+    return {"service": "# CAROLINA Lounge API", "status": "ok"}
 
 
 app.include_router(api_router)
 app.add_middleware(
-    CORSMiddleware, allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"], allow_headers=["*"],
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    client.close()
+    pool = getattr(app.state, "pool", None)
+    if pool:
+        await pool.close()

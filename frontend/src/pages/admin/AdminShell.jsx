@@ -25,7 +25,7 @@ export default function AdminShell() {
               <Coffee className="w-4 h-4" strokeWidth={1.5} />
             </div>
             <div>
-              <div className="font-heading text-lg leading-none">Tablezy</div>
+              <div className="font-heading text-lg leading-none">CAROLINA Lounge</div>
               <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">Admin</div>
             </div>
           </div>

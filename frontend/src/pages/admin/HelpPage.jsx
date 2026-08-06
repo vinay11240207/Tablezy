@@ -26,7 +26,7 @@ export default function HelpPage() {
       </div>
       <div className="bg-card border border-border rounded-xl p-4">
         <div className="font-heading text-lg mb-1">Need more help?</div>
-        <p className="text-sm text-muted-foreground">Email <a className="text-primary underline" href="mailto:support@tablezy.com">support@tablezy.com</a> or use the Report a Problem button in the corner of your admin dashboard.</p>
+        <p className="text-sm text-muted-foreground">Email <a className="text-primary underline" href="mailto:support@carolinalounge.com">support@carolinalounge.com</a> or use the Report a Problem button in the corner of your admin dashboard.</p>
       </div>
     </div>
   );

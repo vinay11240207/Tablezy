@@ -18,7 +18,7 @@ export default function CustomerShell() {
               <Coffee className="w-5 h-5" strokeWidth={2} />
             </div>
             <div className="leading-tight">
-              <div className="font-heading text-xl">Tablezy</div>
+              <div className="font-heading text-xl"># CAROLINA Lounge</div>
               <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">Cafe · Order</div>
             </div>
           </Link>
