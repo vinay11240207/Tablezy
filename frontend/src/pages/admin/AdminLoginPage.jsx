@@ -49,7 +49,7 @@ export default function AdminLoginPage() {
           </label>
           <button data-testid="admin-login-submit" disabled={busy} className="w-full h-11 rounded-md bg-primary text-primary-foreground font-medium disabled:opacity-40">{busy ? "Signing in…" : "Sign in"}</button>
         </form>
-        <p className="text-xs text-muted-foreground mt-4 text-center">Demo: admin@carolinalounge.com / carolina123</p>
+        <p className="text-xs text-muted-foreground mt-4 text-center">Admin: admin@carolinalounge.com</p>
       </div>
     </div>
   );
